@@ -1,0 +1,8 @@
+@import 'tailwindcss';
+
+/* Dark Mode über die .dark-Klasse am <html>, nicht über das OS-Medium */
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  @apply bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+}
