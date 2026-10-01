@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Laufzeitdaten: Browserprofil, Kurskonfiguration, optionale HTML-Snapshots
+# (Snapshots enthalten Name und Matrikelnummer)
+data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

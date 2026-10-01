@@ -1,0 +1,119 @@
+"""End-zu-End gegen den Fake-LPIS: Priorität, Warteliste, Retry, Logout.
+
+Alles läuft headless und nur gegen 127.0.0.1 — es geht kein Request an die WU.
+Die Öffnungszeit wird als manuelle Startzeit (sekundengenau) gesetzt, wie es
+auch der Nutzer täte, wenn LPIS nur Minuten anzeigt.
+"""
+import asyncio
+import datetime as dt
+
+from backend.lpis_page import VIENNA
+from backend.models import AppConfig, Phase
+from fakelpis.server import FakeLpis
+
+from .helpers import course, fast_settings, run_to_end, wait_for
+
+
+def start_at(fake) -> str:
+    return dt.datetime.fromtimestamp(fake.opens_at, VIENNA).strftime("%H:%M:%S")
+
+
+async def test_priority_fallback_three_courses():
+    """Erste Wahl voll zur Öffnung -> die Engine nimmt die zweite; drei Kurse parallel."""
+    fake = FakeLpis(opens_in=10, full_at_open={"1111", "2221"}).start()
+    try:
+        at = start_at(fake)
+        engine, _ = await run_to_end(fake, [
+            course("a", ["1111", "1112", "1113"], start_at=at),
+            course("b", ["2221", "2222"], start_at=at),
+            course("c", ["3331"], start_at=at),
+        ])
+    finally:
+        fake.stop()
+    assert fake.registered == {"1112": "fix", "2222": "fix", "3331": "fix"}
+    for c in engine.courses:
+        assert c.state.phase == Phase.DONE
+        assert c.state.result.startswith("angemeldet")
+
+
+async def test_waitlist_when_everything_is_full():
+    fake = FakeLpis(opens_in=8, full_at_open={"1111", "1112", "1113"}).start()
+    try:
+        engine, _ = await run_to_end(fake, [
+            course("a", ["1111", "1112"], start_at=start_at(fake), waitlist=True),
+        ])
+    finally:
+        fake.stop()
+    assert fake.registered == {"1111": "warteliste"}   # Warteliste der ersten Wahl
+    assert "WARTELISTE" in engine.courses[0].state.result
+
+
+async def test_waitlist_disabled_keeps_waiting():
+    fake = FakeLpis(opens_in=8, full_at_open={"1111", "1112", "1113"}).start()
+    try:
+        settings = fast_settings(fake, give_up_after=6.0)
+        engine, _ = await run_to_end(fake, [
+            course("a", ["1111", "1112"], start_at=start_at(fake), waitlist=False),
+        ], settings=settings)
+    finally:
+        fake.stop()
+    assert fake.registered == {}                        # nichts geklickt
+    assert engine.courses[0].state.phase == Phase.ERROR
+    assert "aufgegeben" in engine.courses[0].state.result
+
+
+async def test_retry_after_failed_clicks():
+    """Die ersten zwei Klicks schlagen fehl -> der dritte (von max. 3) sitzt."""
+    fake = FakeLpis(opens_in=8, reject_clicks={"3331": 2}).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("c", ["3331"], start_at=start_at(fake)),
+        ])
+    finally:
+        fake.stop()
+    assert fake.registered == {"3331": "fix"}
+    assert engine.courses[0].state.result.startswith("angemeldet")
+    clicks = [e for e in events if e["type"] == "log" and e["text"].startswith("Klicke")]
+    assert len(clicks) == 3
+
+
+async def test_logout_warning_and_relogin():
+    """Session läuft beim Keepalive ab -> Alarm; nach Re-Login meldet die Engine an."""
+    fake = FakeLpis(opens_in=18, session_ttl=5,
+                    courses={"a": ("Beispielkurs A", {"1111": "Lektor A."})}).start()
+    try:
+        settings = fast_settings(fake, keepalive_every=2.0, final_sync_before=3.0,
+                                 settle_timeout=1.0)
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111"], start_at=start_at(fake)),
+        ], timeout=40)
+    finally:
+        fake.stop()
+    alarms = [e for e in events if e["type"] == "alarm"]
+    assert any("ausgeloggt" in e["text"] for e in alarms)
+    # Der Pilot hat neu eingeloggt, die Anmeldung ging trotzdem durch:
+    assert fake.registered == {"1111": "fix"}
+    assert engine.courses[0].state.result.startswith("angemeldet")
+
+
+async def test_split_course_is_rejected():
+    """Gruppen EINES Kurses auf zwei Einträge verteilt -> harter Stopp mit Erklärung."""
+    from backend.engine import Engine
+    from .helpers import pilot_login
+
+    fake = FakeLpis(opens_in=30).start()
+    events: list[dict] = []
+    engine = Engine(listener=events.append)
+    try:
+        engine.start(AppConfig(courses=[course("a1", ["1111"]), course("a2", ["1112"])]),
+                     fast_settings(fake))
+        pilot = asyncio.create_task(pilot_login(engine))
+        try:
+            await wait_for(lambda: not engine.state.running, 20, "Engine stoppt")
+        finally:
+            pilot.cancel()
+    finally:
+        await engine.stop()
+        fake.stop()
+    assert any(e["type"] == "alarm" and "selben LPIS-Seite" in e["text"] for e in events)
+    assert fake.registered == {}
