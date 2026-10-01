@@ -116,6 +116,7 @@ class Engine:
         self._task = asyncio.create_task(self._run_guarded())
 
     async def stop(self):
+        was_running = self.state.running
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -127,8 +128,9 @@ class Engine:
         for c in self.courses:
             if c.state.phase not in (Phase.DONE, Phase.ERROR):
                 c.state.phase = Phase.IDLE
-        self.push_state()
-        self.log("Gestoppt.")
+        if was_running:
+            self.push_state()
+            self.log("Gestoppt.")
 
     async def _close_browser(self):
         for obj in (self._context, self._pw):
@@ -264,18 +266,21 @@ class Engine:
                         self.log(f"{c.state.name or 'Kursseite'} gefunden.", course=c.n)
                         self.push_state()
             if all(c.url for c in courses):
-                self.state.logged_in = True
+                # logged_in erst wieder True, wenn ein frischer Reload klappt —
+                # ein alter Tab kann hier noch veraltetes DOM zeigen.
                 self.push_state()
                 return
             await asyncio.sleep(1)
 
     async def _relogin(self, c: RuntimeCourse):
         """Nach einem Logout: Nutzer warnen und warten, bis die Seite wieder offen ist."""
+        first_notice = self.state.logged_in is not False
         self.state.logged_in = False
         c.state.message = "AUSGELOGGT — im Browserfenster neu einloggen und die Kursseite öffnen!"
         self.push_state()
-        self.log(f"LPIS hat dich ausgeloggt — im Bot-Fenster neu einloggen und die "
-                 f"Seite von Kurs {c.n} wieder öffnen!", course=c.n, alarm=True)
+        if first_notice:  # eine Warnung pro Ausfall reicht
+            self.log(f"LPIS hat dich ausgeloggt — im Bot-Fenster neu einloggen und die "
+                     f"Seite von Kurs {c.n} wieder öffnen!", course=c.n, alarm=True)
         async with self._relogin_lock:  # mehrere Kurse warten hier nacheinander
             await self._find_pages([c])
 
@@ -287,12 +292,13 @@ class Engine:
                 snap = await self._settle(c.page, course=c.n)
                 rows = lp.rows_by_group(snap)
                 if rows.keys() & set(c.groups):
-                    if self.state.logged_in is False:
+                    if self.state.logged_in is not True:
                         self.state.logged_in = True
                         self.push_state()
                     return rows
             await self._dump(c.page, f"reload_{c.n}.html")
             await self._relogin(c)
+            await asyncio.sleep(1)  # dem Nutzer Luft lassen, statt eng zu loopen
 
     # --- Gruppen & Zeiten -------------------------------------------------------------
 

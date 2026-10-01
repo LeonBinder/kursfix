@@ -37,9 +37,11 @@ def course(id_: str, groups: list[str], **kw) -> CourseConfig:
 
 
 async def pilot_login(engine: Engine):
-    """Klickt den Login-Button, solange die Engine nicht eingeloggt ist."""
+    """Spielt den Nutzer: loggt ein, sobald die Engine es braucht (Start oder
+    nachdem sie den Logout bemerkt hat — nicht früher, sonst testet niemand
+    die Logout-Erkennung)."""
     while True:
-        if engine.state.logged_in is not True and engine._context:
+        if engine._context and engine.state.logged_in is not True:
             for page in list(engine._context.pages):
                 if "/login" in page.url:
                     try:
