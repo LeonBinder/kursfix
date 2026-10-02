@@ -79,6 +79,7 @@
 
         <input value={drafts[course.id] ?? course.groups.join(', ')}
                placeholder="Gruppen: 1111, 1112, 1113"
+               title="Die 4-stelligen Nummern aus der linken LPIS-Spalte, erste Wahl zuerst. Alle Gruppen EINES Kurses in EIN Feld."
                oninput={(e) => setGroups(course.id, e.target.value)}
                class="{inputClass} mt-2 font-mono" />
         {#if course.groups.length}
@@ -96,9 +97,11 @@
         <div class="mt-2 flex items-center gap-3">
           <input value={course.start_at ?? ''}
                  placeholder="Startzeit 14:00 (leer = LPIS)"
+                 title="Nur nötig, wenn LPIS keine Öffnungszeit anzeigt. Hat sonst Vorrang vor der Seite. Formate: 14:00, 14:00:00, 28.09.2026 14:00 (Wiener Zeit)."
                  oninput={(e) => update(course.id, 'start_at', e.target.value.trim() || null)}
                  class="{inputClass} {course.start_at && !TIME_RE.test(course.start_at) ? 'border-wu-red focus:border-wu-red' : ''}" />
-          <label class="flex shrink-0 cursor-pointer items-center gap-1.5 text-[13px] text-zinc-500 dark:text-zinc-400">
+          <label class="flex shrink-0 cursor-pointer items-center gap-1.5 text-[13px] text-zinc-500 dark:text-zinc-400"
+                 title="Wenn ALLE Gruppen voll sind: an = Warteliste der ersten Wahl nehmen; aus = weiter auf frei werdende Plätze lauern (2 Minuten), dann aufgeben.">
             <input type="checkbox" checked={course.waitlist}
                    onchange={(e) => update(course.id, 'waitlist', e.target.checked)}
                    class="accent-[#0b80a7]" />

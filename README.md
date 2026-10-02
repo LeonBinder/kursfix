@@ -53,10 +53,42 @@ python run.py
    in den ersten 2 Sekunden). Erfolg = der Button wird „abmelden“; das Ergebnis
    steht auf der Kurskarte. Danach in der LPIS-Anmeldeliste gegenprüfen.
 
-Wirst du zwischendurch ausgeloggt, warnt die App (Banner + Ton): im
-Bot-Fenster neu einloggen und die Kursseite wieder öffnen — sie macht alleine
-weiter. Meldet sie „kein Button gefunden“, hat LPIS sein Layout geändert:
-dann nicht auf die App verlassen.
+## Wie kursfix entscheidet
+
+**Priorität:** Zur Öffnung wird die Seite neu geladen und die **erste Gruppe
+deiner Liste geklickt, die offen ist und freie Plätze zeigt**. Registriert der
+Klick nicht (LPIS-Hänger, Platz im selben Moment weg), wird neu geladen und
+erneut geprüft — maximal 3 Versuche pro Gruppe; schnelle Wiederholungen
+(alle 0,15 s) gibt es nur in den ersten 2 Sekunden, danach wird abgebremst.
+
+**Warteliste (pro Kurs einstellbar):** Sie greift nur, wenn *alle* deine
+Gruppen 0 freie Plätze zeigen.
+
+| Einstellung | Verhalten, wenn alles voll ist |
+|---|---|
+| **an** (Standard) | kursfix trägt dich in die Warteliste deiner **ersten Wahl** ein und zeigt danach die freien Plätze der anderen Gruppen, falls du lieber von Hand wechselst. |
+| **aus** | Es wird keine volle Gruppe angeklickt. kursfix beobachtet 2 Minuten weiter — meldet sich jemand ab, schlägt es sofort zu. Danach gibt es auf. Sinnvoll, wenn dir ein Wartelistenplatz nichts bringt. |
+
+**Startzeit:** Normalerweise liest kursfix den Öffnungszeitpunkt („ab 28.09.
+14:00“) von der Kursseite. Nur wenn dort keiner steht, trägst du ihn manuell
+ein — `14:00`, `14:00:00` oder `28.09.2026 14:00` (Wiener Zeit). Eine gesetzte
+Startzeit hat immer Vorrang. **Alle Gruppen eines Kurses gehören in einen
+Eintrag** — verteilt auf zwei Einträge stoppt kursfix mit einer Erklärung,
+damit sich die Tabs nicht gegenseitig in die Quere kommen.
+
+**Schon angemeldet?** Zeigt eine Gruppe bereits „abmelden“, überspringt kursfix
+den Kurs (es wird nie abgemeldet oder umgemeldet).
+
+## Wenn etwas schiefgeht
+
+| Meldung | Bedeutung / was tun |
+|---|---|
+| Banner „ausgeloggt“ + Ton | WU-Session abgelaufen. Im Bot-Fenster neu einloggen, Kursseite wieder öffnen — kursfix macht alleine weiter. |
+| `nicht auf der Seite — Nummer prüfen` | Die Gruppennummer steht nicht auf der geöffneten Kursseite. Tippfehler oder falscher Kurs. |
+| `kein Button gefunden` | LPIS hat sein Seitenlayout geändert — nicht auf kursfix verlassen, von Hand anmelden. |
+| `WARTELISTE` (gold) | Die Gruppe war im Klickmoment voll. Die Karte zeigt die freien Plätze der anderen Gruppen zum manuellen Wechseln. |
+| `Anmeldung hat nie geöffnet` | 30 s nach der (vermuteten) Öffnung weiter alles gesperrt — Öffnungszeit und Nummern prüfen. |
+| `aufgegeben` | 2 Minuten nach Öffnung ohne Erfolg — in LPIS von Hand prüfen. |
 
 ## Trockenlauf
 

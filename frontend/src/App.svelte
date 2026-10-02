@@ -2,6 +2,7 @@
   import { fade, fly } from 'svelte/transition'
   import { connected, engine, config, startEngine, stopEngine } from './lib/ws.js'
   import CourseEditor from './components/CourseEditor.svelte'
+  import HelpPanel from './components/HelpPanel.svelte'
   import CourseCard from './components/CourseCard.svelte'
   import Countdown from './components/Countdown.svelte'
   import LogPanel from './components/LogPanel.svelte'
@@ -157,6 +158,8 @@
             Trockenlauf — alles bleibt auf diesem Rechner.
           </p>
         {/if}
+
+        <HelpPanel />
       </aside>
 
       <section class="flex min-w-0 flex-col gap-4">
