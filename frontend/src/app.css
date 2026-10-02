@@ -1,8 +1,40 @@
+@import '@fontsource-variable/inter';
 @import 'tailwindcss';
 
 /* Dark Mode über die .dark-Klasse am <html>, nicht über das OS-Medium */
 @custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  /* WU-Wien-Palette (Corporate Design): dezent eingesetzt auf Schwarz/Weiß */
+  --color-wu: #0b80a7; /* Pantone 313 — WU-Hauptfarbe */
+  --color-wu-deep: #003366; /* Pantone 282 */
+  --color-wu-gold: #cc9900; /* Pantone 144 */
+  --color-wu-red: #cc3333; /* Pantone 1795 */
+  --color-wu-green: #006633; /* Pantone 343 */
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --animate-blink: blink 1.4s ease-in-out infinite;
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+  }
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
-  @apply bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+  @apply bg-white font-sans text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-50;
+  font-feature-settings: 'ss01', 'cv05';
+}
+
+/* Fokus-Ringe in der WU-Farbe, überall konsistent */
+:where(button, input, a, [tabindex]):focus-visible {
+  @apply outline-2 outline-offset-2 outline-wu;
+}
+
+::selection {
+  @apply bg-wu/20;
 }

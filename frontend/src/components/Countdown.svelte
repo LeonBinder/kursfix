@@ -15,6 +15,7 @@
   )
   // Restzeit in LPIS-Zeit: die eigene Uhr um den gemessenen Offset korrigieren
   const remaining = $derived(target ? target.opens_at - (now + $engine.clock.offset) : null)
+  const critical = $derived(remaining !== null && remaining <= 10)
 
   function fmt(sec) {
     if (sec <= 0) return 'JETZT'
@@ -25,26 +26,50 @@
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${t}`
   }
 
-  function lpisTime(ts) {
-    return new Date(ts * 1000).toLocaleTimeString('de-AT')
-  }
+  const lpisTime = (ts) => new Date(ts * 1000).toLocaleTimeString('de-AT')
+
+  // Countdown auch im Tab-Titel, falls das Fenster im Hintergrund liegt
+  $effect(() => {
+    document.title = target && remaining > 0
+      ? `${fmt(remaining).slice(0, -2)} · kursfix`
+      : 'kursfix — LPIS-Anmeldung auf die Sekunde'
+  })
 </script>
 
-<div class="rounded-2xl bg-white p-5 text-center shadow-sm dark:bg-zinc-900">
+<div class="relative overflow-hidden rounded-2xl border border-zinc-200 px-6 py-7 text-center dark:border-zinc-800">
+  <!-- feine WU-Akzentlinie oben -->
+  <span class="absolute inset-x-0 top-0 h-px {target ? 'bg-wu' : 'bg-zinc-200 dark:bg-zinc-800'}"></span>
+
   {#if target}
-    <div class="font-mono text-6xl font-bold tabular-nums tracking-tight
-                {remaining <= 10 ? 'text-orange-500' : ''}">
+    <p class="text-[11px] font-semibold tracking-[0.2em] text-zinc-400 uppercase">Nächste Öffnung</p>
+    <div class="mt-2 font-sans text-6xl font-black tracking-tighter tabular-nums sm:text-7xl
+                {critical ? 'text-wu-red' : ''}">
       {fmt(remaining)}
     </div>
-    <div class="mt-1 text-sm text-zinc-500">
-      bis zur Öffnung von <strong>{target.name || target.config.label || 'Kurs'}</strong>
-      um {lpisTime(target.opens_at)} LPIS-Zeit
-    </div>
+    <p class="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+      <strong class="font-semibold text-zinc-900 dark:text-zinc-100">
+        {target.name || target.config.label || 'Kurs'}</strong>
+      öffnet um {lpisTime(target.opens_at)} LPIS-Zeit
+      {#if target.fire_at}
+        <span class="text-zinc-400">· Schuss um {lpisTime(target.fire_at)} PC-Zeit</span>
+      {/if}
+    </p>
   {:else if $engine.running}
-    <div class="font-mono text-5xl font-bold text-zinc-300 dark:text-zinc-700">--:--:--</div>
-    <div class="mt-1 text-sm text-zinc-500">Warte auf Kursseiten und Öffnungszeiten …</div>
+    <p class="text-[11px] font-semibold tracking-[0.2em] text-zinc-400 uppercase">Vorbereitung</p>
+    <div class="mt-2 font-sans text-6xl font-black tracking-tighter text-zinc-200 tabular-nums sm:text-7xl dark:text-zinc-800">
+      00:00:00<span class="text-4xl sm:text-5xl">.0</span>
+    </div>
+    <p class="mt-2 flex items-center justify-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+      <span class="h-1.5 w-1.5 animate-blink rounded-full bg-wu"></span>
+      Warte auf Login und Kursseiten im Browserfenster …
+    </p>
   {:else}
-    <div class="font-mono text-5xl font-bold text-zinc-300 dark:text-zinc-700">--:--:--</div>
-    <div class="mt-1 text-sm text-zinc-500">Nicht gestartet</div>
+    <p class="text-[11px] font-semibold tracking-[0.2em] text-zinc-400 uppercase">Bereit</p>
+    <div class="mt-2 font-sans text-6xl font-black tracking-tighter text-zinc-200 tabular-nums sm:text-7xl dark:text-zinc-800">
+      00:00:00<span class="text-4xl sm:text-5xl">.0</span>
+    </div>
+    <p class="mt-2 text-sm text-zinc-400">
+      Noch nicht gestartet — nach dem Start erscheinen hier Countdown und Live-Karten deiner Kurse.
+    </p>
   {/if}
 </div>

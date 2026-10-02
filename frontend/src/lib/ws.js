@@ -65,10 +65,24 @@ async function api(path, body) {
   return resp.json()
 }
 
+// 'idle' | 'saving' | 'saved' — speist die dezente Speicher-Anzeige im Editor
+export const saveState = writable('idle')
 let saveTimer = null
+let savedTimer = null
 export function saveConfigSoon() {
   clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => api('/api/config', get(config)).catch(console.error), 400)
+  saveState.set('saving')
+  saveTimer = setTimeout(async () => {
+    try {
+      await api('/api/config', get(config))
+      saveState.set('saved')
+      clearTimeout(savedTimer)
+      savedTimer = setTimeout(() => saveState.set('idle'), 1500)
+    } catch (e) {
+      console.error(e)
+      saveState.set('idle')
+    }
+  }, 400)
 }
 
 export const startEngine = (dryRun) => api('/api/start', { dry_run: dryRun })

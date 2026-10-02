@@ -9,6 +9,15 @@ gespeichert**.
 Inspiriert von [discreteagent/wu-lpis-bot](https://github.com/discreteagent/wu-lpis-bot)
 (im WiSe 2026 live getestet); die Logik wurde für diese App neu geschrieben.
 
+![kursfix während eines Laufs](docs/screenshot-running.png)
+
+<details>
+<summary>Mehr Screenshots (Startansicht, Dark Mode)</summary>
+
+![Startansicht](docs/screenshot-idle.png)
+![Dark Mode](docs/screenshot-dark.png)
+</details>
+
 ## Setup
 
 Voraussetzungen: Python 3.10+, Node.js (nur für den ersten Start, baut die UI),
