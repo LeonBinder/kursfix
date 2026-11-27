@@ -52,13 +52,13 @@ class CourseState(BaseModel):
     name: str = ""
     groups: list[GroupInfo] = Field(default_factory=list)
     opens_at: Optional[float] = None     # LPIS-Zeit (Unix)
-    fire_at: Optional[float] = None      # PC-Zeit (Unix), zu der neu geladen wird
+    fire_at: Optional[float] = None      # Engine-Uhr (timing.now), zu der neu geladen wird
     result: str = ""
     message: str = ""                    # letzte Statuszeile für die Karte
 
 
 class ClockState(BaseModel):
-    offset: float = 0.0                  # LPIS-Zeit = PC-Zeit + offset
+    offset: float = 0.0                  # LPIS-Zeit = Engine-Uhr + offset
     uncertainty: float = 0.5
     trip: float = 0.0                    # gemessene Latenz (round trip)
     source: str = "none"
@@ -69,6 +69,9 @@ class EngineState(BaseModel):
     """Der komplette Zustand, den die UI anzeigt."""
     running: bool = False
     dry_run: bool = False
+    mode: str = "live"                   # "live" | "dry" (Fake-LPIS) | "check" (Prüflauf, klickt nie)
+    target: str = ""                     # Host, gegen den der Lauf geht (z. B. lpis.wu.ac.at)
     logged_in: Optional[bool] = None     # None: noch unbekannt
+    now: float = 0.0                     # Engine-Uhr beim Senden (die UI gleicht ihre Uhr daran ab)
     clock: ClockState = Field(default_factory=ClockState)
     courses: list[CourseState] = Field(default_factory=list)

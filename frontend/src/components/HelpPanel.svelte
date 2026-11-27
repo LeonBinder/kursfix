@@ -58,6 +58,23 @@
           ohne Erfolg; Nummern und Uhrzeit prüfen.`,
     },
     {
+      q: 'Prüflauf — liest kursfix die echte Seite richtig?',
+      a: `Der Prüflauf geht gegen das echte LPIS, klickt aber garantiert nichts: Du loggst
+          dich ein und öffnest die Kursseiten wie beim Start; kursfix liest Gruppen, freie
+          Plätze, Buttons und Öffnungszeit, gleicht die Uhr ab und meldet pro Kurs
+          „geprüft“ oder das Problem. Ideal ein paar Stunden vor der Öffnung. Achtung:
+          Ist eine Anmeldung schon offen, sagt dir der Prüflauf das — „Start“ würde dann
+          sofort anmelden.`,
+    },
+    {
+      q: 'Echt oder Fake — wogegen läuft es gerade?',
+      a: `Unter den Buttons steht während jedes Laufs der Modus: ECHTES LPIS (rot, es wird
+          wirklich angemeldet), PRÜFLAUF (gold, echtes LPIS, nur lesen) oder TROCKENLAUF
+          (lokaler Fake). Zusätzlich: Die Adresszeile im Bot-Fenster zeigt lpis.wu.ac.at
+          bzw. 127.0.0.1, die erste Logzeile nennt das Ziel, und nur das echte LPIS
+          verlangt deinen WU-Login.`,
+    },
+    {
       q: 'Trockenlauf — gefahrlos üben',
       a: `Der Trockenlauf baut einen Fake-LPIS mit genau deinen Kursen auf diesem Rechner
           (Öffnung nach 60 Sekunden) und spielt alles durch: Login-Klick, Kursseiten

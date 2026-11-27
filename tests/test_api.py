@@ -27,6 +27,15 @@ def test_start_with_broken_start_time(monkeypatch):
     assert "Mathe" in resp.json()["detail"]
 
 
+def test_start_rejects_dry_run_and_check_together(monkeypatch):
+    cfg = AppConfig(courses=[CourseConfig(id="x", groups=["1111"])])
+    monkeypatch.setattr(app_module, "load_config", lambda: cfg)
+    with client() as c:
+        resp = c.post("/api/start", json={"dry_run": True, "check": True})
+    assert resp.status_code == 400
+    assert "schließen sich aus" in resp.json()["detail"]
+
+
 def test_websocket_hello(monkeypatch):
     monkeypatch.setattr(app_module, "load_config", lambda: AppConfig())
     with client() as c, c.websocket_connect("/ws") as ws:

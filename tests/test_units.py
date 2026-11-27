@@ -25,6 +25,16 @@ def test_parse_opening():
     assert lp.parse_opening({"opens": ""}) is None
 
 
+def test_parse_opening_ignores_deadlines():
+    """'bis …' ist das Fristende einer offenen Anmeldung, keine Öffnungszeit."""
+    assert lp.parse_opening({"opens": "bis 27.11.2026 23:59"}) is None
+    assert lp.parse_opening({"opens": "Anmeldung bis 27.11.2026 23:59"}) is None
+    both = lp.parse_opening({"opens": "ab 28.09.2026 14:00 bis 27.11.2026 23:59"})
+    assert dt.datetime.fromtimestamp(both, lp.VIENNA).month == 9
+    late = lp.parse_opening({"opens": "bis 01.09.2026 12:00, ab 28.09.2026 14:00"})
+    assert dt.datetime.fromtimestamp(late, lp.VIENNA).day == 28
+
+
 def test_parse_start_at():
     t = lp.parse_start_at("28.09.2026 14:00")
     assert dt.datetime.fromtimestamp(t, lp.VIENNA).hour == 14

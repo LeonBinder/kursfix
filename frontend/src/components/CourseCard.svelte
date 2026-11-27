@@ -13,7 +13,7 @@
   }
   const phase = $derived(PHASES[course.phase] ?? PHASES.idle)
   const resultTone = $derived(
-    course.result.startsWith('angemeldet') || course.result.startsWith('bereits')
+    /^(angemeldet|bereits|geprüft)/.test(course.result)
       ? 'text-wu-green dark:text-emerald-400'
       : course.result.includes('WARTELISTE')
         ? 'text-wu-gold'

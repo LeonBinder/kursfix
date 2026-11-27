@@ -21,6 +21,8 @@ import http.server
 import secrets
 import threading
 import time
+
+from backend import timing
 import urllib.parse
 from zoneinfo import ZoneInfo
 
@@ -55,7 +57,7 @@ class FakeLpis:
                  session_ttl: float | None = None,
                  auto_login: bool = False,
                  latency: float = 0.05):
-        self.opens_at = opens_at if opens_at is not None else float(int(time.time() + opens_in))
+        self.opens_at = opens_at if opens_at is not None else float(int(timing.now() + opens_in))
         self.courses = courses or DEFAULT_COURSES
         self.full_at_open = set(full_at_open)
         self.reject_clicks = dict(reject_clicks or {})   # lv -> Zahl absichtlicher Fehlklicks
@@ -68,6 +70,12 @@ class FakeLpis:
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def date_time_string(self, timestamp=None):
+                # Date-Header auf derselben gleichmäßigen Uhr wie die Öffnungszeit
+                import email.utils
+                return email.utils.formatdate(
+                    timing.now() if timestamp is None else timestamp, usegmt=True)
+
             def log_message(self, *args):
                 pass
 
@@ -101,7 +109,7 @@ class FakeLpis:
                     sess = fake.sessions.get(sid)
                     if not sess:
                         return None
-                    if fake.session_ttl and time.time() - sess["created"] > fake.session_ttl:
+                    if fake.session_ttl and timing.now() - sess["created"] > fake.session_ttl:
                         del fake.sessions[sid]
                         return None
                     return sess
@@ -136,7 +144,7 @@ class FakeLpis:
                 if self.path.startswith("/login"):
                     sid = secrets.token_hex(16)
                     with fake.lock:
-                        fake.sessions[sid] = {"created": time.time(), "tokens": {}}
+                        fake.sessions[sid] = {"created": timing.now(), "tokens": {}}
                     query = urllib.parse.urlparse(self.path).query
                     target = urllib.parse.parse_qs(query).get("next", ["/overview"])[0]
                     html = f"<script>location.href={target!r};</script>"
@@ -167,7 +175,7 @@ class FakeLpis:
                 return "Ungültige Anfrage (seed). Bitte die Seite neu laden."
             if lv not in self.courses[key][1]:
                 return "Unbekannte Lehrveranstaltung."
-            if time.time() < self.opens_at:
+            if timing.now() < self.opens_at:
                 return "Die Anmeldung ist derzeit nicht möglich."
             if self.reject_clicks.get(lv, 0) > 0:
                 self.reject_clicks[lv] -= 1
@@ -205,7 +213,7 @@ class FakeLpis:
 
     def course_page(self, key: str, sess: dict, alert: str = "") -> str:
         title, groups = self.courses[key]
-        is_open = time.time() >= self.opens_at
+        is_open = timing.now() >= self.opens_at
         opens_text = dt.datetime.fromtimestamp(self.opens_at, VIENNA).strftime(
             "ab %d.%m.%Y %H:%M")
         rows = []

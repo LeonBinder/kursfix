@@ -25,9 +25,33 @@ NTP_UNIX_DELTA = 2_208_988_800  # Sekunden zwischen NTP-Epoche (1900) und Unix-E
 SAFETY_MARGIN = 0.02            # s nach der Öffnung, zu denen der Request ankommen soll
 
 
+# --- Stabile Uhr ---------------------------------------------------------------
+# Die Systemuhr (time.time) kann springen oder zu schnell/langsam laufen, wenn
+# ein Zeitdienst sie nachstellt — in WSL2 wurden 8 % Fehlgang und 3-s-Sprünge
+# alle 35 s gemessen. Für das Timing zählt nur, dass die Uhr GLEICHMÄSSIG läuft;
+# den Abstand zur LPIS-Zeit misst der Uhrabgleich ohnehin. Darum läuft alles auf
+# der Rohuhr des Kernels (CLOCK_MONOTONIC_RAW), die niemand verstellt, einmal
+# beim Start an die Systemuhr angelegt, damit die Werte wie Unix-Zeit aussehen.
+_RAW_CLOCK = getattr(time, "CLOCK_MONOTONIC_RAW", None)
+
+
+def _raw() -> float:
+    if _RAW_CLOCK is not None:
+        return time.clock_gettime(_RAW_CLOCK)
+    return time.perf_counter()  # Windows: gleichmäßig, ohne Sprünge
+
+
+_ANCHOR = time.time() - _raw()
+
+
+def now() -> float:
+    """Gleichmäßig laufende Uhr in Unix-Sekunden (springt nie). LPIS-Zeit = now() + offset."""
+    return _ANCHOR + _raw()
+
+
 @dataclass
 class ClockSync:
-    offset: float        # Serverzeit = PC-Zeit + offset
+    offset: float        # Serverzeit = now() + offset
     uncertainty: float   # geschätzter Fehler des Offsets in s
     trip: float          # Latenz (round trip) in s
     source: str
@@ -45,10 +69,10 @@ def sntp_sample(host: str, attempts: int = 4, timeout: float = 1.5):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(timeout)
             for _ in range(attempts):
-                sent = time.time()
+                sent = now()
                 sock.sendto(b"\x1b" + 47 * b"\0", (host, 123))
                 packet = sock.recv(48)
-                received = time.time()
+                received = now()
                 if len(packet) < 48 or packet[1] == 0:  # Stratum 0: Kiss-o'-Death
                     continue
                 srv_rx = _ntp_timestamp(packet, 32)
@@ -73,11 +97,11 @@ def http_date_bounds(host: str, port: int | None = None, https: bool = True,
     conn = conn_cls(host, port, timeout=timeout)
     try:
         for _ in range(samples):
-            sent = time.time()
+            sent = now()
             conn.request("HEAD", "/")
             resp = conn.getresponse()
             resp.read()
-            received = time.time()
+            received = now()
             header = resp.getheader("Date")
             server = email.utils.parsedate_to_datetime(header).timestamp()
             # Der Server hat den Header irgendwann zwischen sent und received gestempelt,
@@ -120,9 +144,12 @@ def fire_time(opens_at: float, sync: ClockSync) -> float:
 
 
 async def sleep_until(t: float):
-    """Bis zur PC-Zeit t schlafen; die letzten Millisekunden aktiv warten."""
-    remaining = t - time.time()
-    if remaining > 0.03:
-        await asyncio.sleep(remaining - 0.03)
-    while time.time() < t:
+    """Bis zum Zeitpunkt t (auf der now()-Uhr) schlafen; die letzten Millisekunden aktiv warten.
+
+    asyncio schläft auf der Monotonuhr des Systems, die zu langsam oder zu schnell
+    gehen kann — darum in Etappen annähern und jedes Mal neu auf now() schauen.
+    """
+    while (remaining := t - now()) > 0.03:
+        await asyncio.sleep(max(0.005, (remaining - 0.03) * 0.8))
+    while now() < t:
         pass

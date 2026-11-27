@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from backend import timing
 from backend.engine import Engine, EngineSettings
 from backend.models import AppConfig, CourseConfig, Phase
 from backend.timing import ClockSync
@@ -60,8 +61,13 @@ async def wait_for(predicate, timeout: float, message: str = "Bedingung"):
     raise AssertionError(f"Timeout ({timeout}s): {message}")
 
 
-async def run_to_end(fake, configs, settings=None, timeout: float = 45.0):
-    """Engine starten, Nutzer simulieren, bis alle Kurse fertig sind."""
+async def run_to_end(fake, configs, settings=None, timeout: float = 45.0,
+                     keep_running: float | None = None):
+    """Engine starten, Nutzer simulieren, bis alle Kurse fertig sind.
+
+    ``keep_running``: Zeitpunkt (timing.now-Uhr), bis zu der die Engine danach noch weiterläuft —
+    um zu zeigen, dass später nichts mehr passiert.
+    """
     events: list[dict] = []
     engine = Engine(listener=events.append)
     engine.start(AppConfig(courses=configs), settings or fast_settings(fake))
@@ -70,6 +76,8 @@ async def run_to_end(fake, configs, settings=None, timeout: float = 45.0):
         await wait_for(
             lambda: engine.courses and all(c.state.phase in FINISHED for c in engine.courses),
             timeout, "alle Kurse fertig")
+        if keep_running:
+            await asyncio.sleep(max(0.0, keep_running - timing.now()))
     finally:
         pilot.cancel()
         await engine.stop()

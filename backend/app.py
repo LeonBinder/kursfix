@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import lpis_page as lp
+from . import timing
 from .engine import Engine, EngineSettings
 from .models import AppConfig
 from .store import DATA_DIR, load_config, save_config
@@ -55,10 +56,12 @@ fake_server = None  # laufender Fake-LPIS im Trockenlauf
 
 class StartRequest(BaseModel):
     dry_run: bool = False
+    check: bool = False  # Prüflauf: echtes LPIS, nur lesen, nie klicken
 
 
-def _real_settings(config: AppConfig) -> EngineSettings:
+def _real_settings(config: AppConfig, observe_only: bool = False) -> EngineSettings:
     return EngineSettings(
+        observe_only=observe_only,
         profile_dir=DATA_DIR / "browser-profile",
         snapshots_dir=(DATA_DIR / "snapshots") if config.save_snapshots else None,
     )
@@ -124,6 +127,8 @@ def put_config(config: AppConfig) -> AppConfig:
 async def start(req: StartRequest):
     if engine.state.running:
         raise HTTPException(409, "Die Engine läuft bereits.")
+    if req.dry_run and req.check:
+        raise HTTPException(400, "Trockenlauf und Prüflauf schließen sich aus.")
     config = load_config()
     if not any(any(g.strip() for g in c.groups) for c in config.courses):
         raise HTTPException(400, "Keine Kurse mit Gruppennummern eingetragen.")
@@ -136,9 +141,9 @@ async def start(req: StartRequest):
     if req.dry_run:
         settings, config = _dry_run_settings(config)
     else:
-        settings = _real_settings(config)
+        settings = _real_settings(config, observe_only=req.check)
     engine.start(config, settings)
-    return {"ok": True, "dry_run": req.dry_run}
+    return {"ok": True, "dry_run": req.dry_run, "check": req.check}
 
 
 @app.post("/api/stop")
@@ -153,6 +158,7 @@ async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     broadcaster.clients.add(ws)
     engine.state.courses = [c.state for c in engine.courses]
+    engine.state.now = timing.now()
     await ws.send_json({
         "type": "hello", "ts": time.time(),
         "state": engine.state.model_dump(),

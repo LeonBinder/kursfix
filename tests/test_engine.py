@@ -6,7 +6,9 @@ auch der Nutzer täte, wenn LPIS nur Minuten anzeigt.
 """
 import asyncio
 import datetime as dt
+import time
 
+from backend import timing
 from backend.lpis_page import VIENNA
 from backend.models import AppConfig, Phase
 from fakelpis.server import FakeLpis
@@ -117,3 +119,40 @@ async def test_split_course_is_rejected():
         fake.stop()
     assert any(e["type"] == "alarm" and "selben LPIS-Seite" in e["text"] for e in events)
     assert fake.registered == {}
+
+
+async def test_check_run_never_clicks():
+    """Prüflauf: liest alles, meldet 'geprüft' — und klickt auch nach der Öffnung nichts."""
+    fake = FakeLpis(opens_in=6).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111", "1112"]),
+            course("b", ["2221"]),
+        ], settings=fast_settings(fake, observe_only=True), keep_running=fake.opens_at + 4)
+    finally:
+        fake.stop()
+    assert fake.registered == {}
+    assert engine.state.mode == "check"
+    for c in engine.courses:
+        assert c.state.phase == Phase.DONE
+        assert c.state.result.startswith("geprüft")
+        # Öffnungszeit von der Seite gelesen (LPIS zeigt sie nur minutengenau)
+        assert c.state.opens_at == fake.opens_at - fake.opens_at % 60
+        assert all(g.on_page and g.button == "anmelden" and g.free is not None
+                   for g in c.state.groups)
+    assert not any(e["type"] == "log" and e["text"].startswith("Klicke") for e in events)
+
+
+async def test_check_run_flags_already_open_course():
+    """Prüflauf bei bereits offener Anmeldung: Problem melden statt anmelden."""
+    fake = FakeLpis(opens_in=-30).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111"]),
+        ], settings=fast_settings(fake, observe_only=True), keep_running=timing.now() + 6)
+    finally:
+        fake.stop()
+    assert fake.registered == {}
+    assert engine.courses[0].state.phase == Phase.ERROR
+    assert "BEREITS OFFEN" in engine.courses[0].state.result
+    assert any(e["type"] == "alarm" and "BEREITS OFFEN" in e["text"] for e in events)

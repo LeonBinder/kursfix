@@ -120,13 +120,28 @@ def registered_row(rows: dict[str, dict]) -> dict | None:
     return next((r for r in rows.values() if REGISTERED_RE.search(r["button"])), None)
 
 
+# Zeitangaben, die eine Frist (Ende der An-/Abmeldung) meinen, keine Öffnung
+DEADLINE_RE = re.compile(r"\b(bis|until|till)\b", re.I)
+_DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\D+?(\d{1,2}):(\d{2})")
+
+
 def parse_opening(row: dict) -> float | None:
-    """Öffnungszeitpunkt (Unix, Wiener Zeit) aus dem opens-Feld einer Zeile."""
-    m = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\D+(\d{1,2}):(\d{2})", row.get("opens", ""))
-    if not m:
-        return None
-    day, month, year, hour, minute = map(int, m.groups())
-    return dt.datetime(year, month, day, hour, minute, tzinfo=VIENNA).timestamp()
+    """Öffnungszeitpunkt (Unix, Wiener Zeit) aus dem opens-Feld einer Zeile.
+
+    "ab 28.09.2026 14:00" ist eine Öffnung. "bis 30.11.2026 23:59" ist das Ende
+    der Frist einer bereits offenen Anmeldung und wird übersprungen — sonst
+    würde die App bis zum Fristende warten, statt sofort anzumelden.
+    """
+    text = row.get("opens", "")
+    last_end = 0
+    for m in _DATE_RE.finditer(text):
+        before = text[last_end:m.start()]
+        last_end = m.end()
+        if DEADLINE_RE.search(before):
+            continue
+        day, month, year, hour, minute = map(int, m.groups())
+        return dt.datetime(year, month, day, hour, minute, tzinfo=VIENNA).timestamp()
+    return None
 
 
 def parse_start_at(text: str) -> float:

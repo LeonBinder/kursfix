@@ -138,24 +138,46 @@
               Stop
             </button>
           {:else}
-            <button onclick={() => run(() => startEngine(false))}
+            <button onclick={() => run(() => startEngine('live'))}
                     disabled={busy || !$connected || !hasCourses}
                     class="h-11 flex-1 rounded-xl bg-zinc-950 font-semibold text-white transition hover:bg-zinc-800 active:scale-[0.99] disabled:opacity-40 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200">
               Start
             </button>
-            <button onclick={() => run(() => startEngine(true))}
-                    disabled={busy || !$connected || !hasCourses}
-                    title="Probe gegen einen lokalen Fake-LPIS — es geht nichts an die WU"
-                    class="h-11 rounded-xl border border-zinc-300 px-4 font-medium text-zinc-700 transition hover:border-wu hover:text-wu active:scale-[0.99] disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-wu dark:hover:text-wu">
-              Trockenlauf
-            </button>
           {/if}
         </div>
 
-        {#if $engine.running && $engine.dry_run}
-          <p transition:fade class="flex items-center justify-center gap-2 text-xs font-medium text-wu">
-            <span class="h-1.5 w-1.5 rounded-full bg-wu"></span>
-            Trockenlauf — alles bleibt auf diesem Rechner.
+        {#if !$engine.running}
+          <div class="flex gap-2">
+            <button onclick={() => run(() => startEngine('check'))}
+                    disabled={busy || !$connected || !hasCourses}
+                    title="Echtes LPIS, liest nur Gruppen, Plätze und Öffnungszeit — klickt nie"
+                    class="h-10 flex-1 rounded-xl border border-zinc-300 px-3 text-sm font-medium text-zinc-700 transition hover:border-wu hover:text-wu active:scale-[0.99] disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-wu dark:hover:text-wu">
+              Prüflauf
+            </button>
+            <button onclick={() => run(() => startEngine('dry'))}
+                    disabled={busy || !$connected || !hasCourses}
+                    title="Probe gegen einen lokalen Fake-LPIS — es geht nichts an die WU"
+                    class="h-10 flex-1 rounded-xl border border-zinc-300 px-3 text-sm font-medium text-zinc-700 transition hover:border-wu hover:text-wu active:scale-[0.99] disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-wu dark:hover:text-wu">
+              Trockenlauf
+            </button>
+          </div>
+          <p class="text-center text-[11px] leading-relaxed text-zinc-400">
+            Start = echte Anmeldung · Prüflauf = echtes LPIS, nur lesen · Trockenlauf = lokaler Fake
+          </p>
+        {:else if $engine.mode === 'dry'}
+          <p transition:fade class="flex items-center justify-center gap-2 rounded-xl border border-wu/30 bg-wu/5 px-3 py-2 text-xs font-medium text-wu">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-wu"></span>
+            <span><b>TROCKENLAUF</b> · lokaler Fake ({$engine.target}) — alles bleibt auf diesem Rechner.</span>
+          </p>
+        {:else if $engine.mode === 'check'}
+          <p transition:fade class="flex items-center justify-center gap-2 rounded-xl border border-wu-gold/40 bg-wu-gold/5 px-3 py-2 text-xs font-medium text-wu-gold">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-wu-gold"></span>
+            <span><b>PRÜFLAUF</b> · echtes LPIS ({$engine.target}) — es wird nur gelesen, nichts geklickt.</span>
+          </p>
+        {:else}
+          <p transition:fade class="flex items-center justify-center gap-2 rounded-xl border border-wu-red/40 bg-wu-red/5 px-3 py-2 text-xs font-medium text-wu-red">
+            <span class="h-1.5 w-1.5 shrink-0 animate-blink rounded-full bg-wu-red"></span>
+            <span><b>ECHTES LPIS</b> · {$engine.target} — es wird wirklich angemeldet.</span>
           </p>
         {/if}
 

@@ -97,6 +97,20 @@ Kursen (Öffnung nach 60 s) und spielt den Ablauf komplett durch — Login-Klick
 Kursseiten öffnen, Countdown, Anmeldung. Es verlässt kein Request deinen
 Rechner.
 
+## Prüflauf
+
+Der Button **Prüflauf** geht gegen das **echte** LPIS, klickt aber garantiert
+nichts: einloggen, Kursseiten öffnen — kursfix liest Gruppen, freie Plätze,
+Buttons und Öffnungszeit, gleicht die Uhr ab und meldet pro Kurs `geprüft` oder
+das Problem (Nummer nicht auf der Seite, kein Button, keine Öffnungszeit,
+Anmeldung bereits offen). So siehst du vor der Öffnung, ob kursfix die echte
+Seite richtig versteht. Den Klick selbst kann nur der echte Lauf zeigen.
+
+**Echt oder Fake?** Während jedes Laufs steht der Modus unter den Buttons:
+`ECHTES LPIS` (rot, es wird wirklich angemeldet), `PRÜFLAUF` (gold) oder
+`TROCKENLAUF` (lokaler Fake). Die erste Logzeile nennt das Ziel, und die
+Adresszeile im Bot-Fenster zeigt `lpis.wu.ac.at` bzw. `127.0.0.1`.
+
 ## Tests
 
 ```bash
@@ -111,6 +125,10 @@ Re-Login. An das echte LPIS wird dabei nie ein Request gesendet.
 
 - Die App geht bewusst sanft mit LPIS um: eine Session, ein Seitenaufruf pro
   Versuch, Keepalive nur alle 2 Minuten.
+- Das Timing läuft auf der Rohuhr des Kernels, nicht auf der Systemuhr: Eine
+  Systemuhr, die springt oder falsch geht (in WSL2 gemessen: 8 % zu langsam,
+  alle 35 s um 3 s nachgestellt), verschiebt den Klick damit nicht. Der
+  Prüflauf misst die Uhr zweimal und warnt, falls sie trotzdem instabil ist.
 - HTML-Snapshots der gesehenen Seiten (enthalten Name und Matrikelnummer) werden
   nur geschrieben, wenn du es in der UI aktivierst; `data/` ist git-ignoriert.
 - **Inoffiziell und nicht von der WU.** Prüfe vorher, ob die WU-Regeln

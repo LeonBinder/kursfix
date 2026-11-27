@@ -1,5 +1,5 @@
 <script>
-  import { engine } from '../lib/ws.js'
+  import { engine, skew } from '../lib/ws.js'
 
   let now = $state(Date.now() / 1000)
   $effect(() => {
@@ -13,8 +13,8 @@
       .filter((c) => c.opens_at && ['armed', 'firing'].includes(c.phase))
       .sort((a, b) => a.opens_at - b.opens_at)[0] ?? null
   )
-  // Restzeit in LPIS-Zeit: die eigene Uhr um den gemessenen Offset korrigieren
-  const remaining = $derived(target ? target.opens_at - (now + $engine.clock.offset) : null)
+  // Restzeit in LPIS-Zeit: Browser-Uhr -> Engine-Uhr (skew) -> LPIS-Uhr (offset)
+  const remaining = $derived(target ? target.opens_at - (now + $skew + $engine.clock.offset) : null)
   const critical = $derived(remaining !== null && remaining <= 10)
 
   function fmt(sec) {
@@ -51,7 +51,7 @@
         {target.name || target.config.label || 'Kurs'}</strong>
       öffnet um {lpisTime(target.opens_at)} LPIS-Zeit
       {#if target.fire_at}
-        <span class="text-zinc-400">· Schuss um {lpisTime(target.fire_at)} PC-Zeit</span>
+        <span class="text-zinc-400">· Schuss um {lpisTime(target.fire_at + $engine.clock.offset)} LPIS-Zeit</span>
       {/if}
     </p>
   {:else if $engine.running}

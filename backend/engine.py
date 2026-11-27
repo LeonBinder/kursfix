@@ -51,6 +51,9 @@ class EngineSettings:
     busy_timeout: float = 90.0              # s, wenn LPIS eine Warteseite zeigt
     clock_stub: Optional[timing.ClockSync] = None  # feste Uhr (Tests)
     clock_max_age: float = 30.0             # s, bevor ein Re-Sync wieder misst
+    observe_only: bool = False              # Prüflauf: alles lesen, nie klicken
+    drift_check_wait: float = 10.0          # s zwischen den zwei Uhr-Messungen im Prüflauf
+    drift_warn: float = 0.25                # s Offset-Änderung, ab der die PC-Uhr als instabil gilt
 
 
 class Stop(Exception):
@@ -67,6 +70,7 @@ class RuntimeCourse:
     page: Optional[Page] = None
     opens_at: float = 0.0
     fire_at: float = 0.0
+    open_now: bool = False  # keine Öffnungszeit, aber Button schon klickbar
 
 
 class Engine:
@@ -95,6 +99,7 @@ class Engine:
 
     def push_state(self):
         self.state.courses = [c.state for c in self.courses]
+        self.state.now = timing.now()
         self._emit("state", state=self.state.model_dump())
 
     # --- Start / Stop -------------------------------------------------------------
@@ -111,7 +116,10 @@ class Engine:
                           groups=[lp.normalize_group(g) for g in cfg.groups if g.strip()])
             for n, cfg in enumerate(with_groups, 1)
         ]
-        self.state = EngineState(running=True, dry_run=not settings.https)
+        mode = "check" if settings.observe_only else "live" if settings.https else "dry"
+        target = settings.http_host + (f":{settings.http_port}" if settings.http_port else "")
+        self.state = EngineState(running=True, dry_run=not settings.https,
+                                 mode=mode, target=target)
         self.push_state()
         self._task = asyncio.create_task(self._run_guarded())
 
@@ -187,10 +195,11 @@ class Engine:
         except PlaywrightError:
             return None
 
-    async def _goto(self, page: Page, url: str, course: Optional[int] = None) -> bool:
+    async def _goto(self, page: Page, url: str, course: Optional[int] = None,
+                    timeout_ms: Optional[int] = None) -> bool:
         try:
             await page.goto(url, wait_until="domcontentloaded",
-                            timeout=self.settings.nav_timeout_ms)
+                            timeout=timeout_ms or self.settings.nav_timeout_ms)
             return True
         except PlaywrightError as e:
             if page.is_closed():
@@ -201,14 +210,14 @@ class Engine:
     async def _settle(self, page: Page, course: Optional[int] = None) -> dict | None:
         """Auf die Kurstabelle warten; LPIS-Warteseiten bekommen mehr Geduld."""
         s = self.settings
-        started = time.time()
+        started = timing.now()
         while True:
             snap = await self._snapshot(page)
             if snap and snap["hasTable"]:
                 return snap
             body = snap["bodyStart"] if snap else ""
             limit = s.busy_timeout if lp.BUSY_RE.search(body) else s.settle_timeout
-            if time.time() - started > limit:
+            if timing.now() - started > limit:
                 self.log(f"Keine Kurstabelle auf der Seite: {body[:150]!r}", course=course)
                 return snap
             await asyncio.sleep(0.25)
@@ -319,14 +328,15 @@ class Engine:
         """Uhr abgleichen; gleichzeitige Aufrufe teilen sich eine Messung."""
         s = self.settings
         async with self._clock_lock:
-            if not force and time.time() - self._clock_at < s.clock_max_age:
+            if not force and timing.now() - self._clock_at < s.clock_max_age:
                 return
             if s.clock_stub:
                 sync = s.clock_stub
             else:
                 sync = await timing.measure_async(s.ntp_host, s.http_host,
                                                   s.http_port, s.https)
-            self._clock_at = time.time()
+            previous = self.state.clock if self.state.clock.synced_at else None
+            self._clock_at = timing.now()
             self.state.clock = ClockState(
                 offset=sync.offset, uncertainty=sync.uncertainty,
                 trip=sync.trip, source=sync.source, synced_at=self._clock_at)
@@ -335,6 +345,10 @@ class Engine:
             self.log(f"Uhr: dieser PC geht {abs(sync.offset):.3f} s {direction} LPIS "
                      f"(±{sync.uncertainty:.3f} s, via {sync.source}), "
                      f"Latenz {sync.trip * 1000:.0f} ms")
+            if previous and abs(sync.offset - previous.offset) > s.drift_warn:
+                self.log(f"WARNUNG: Der Uhr-Offset hat sich seit dem letzten Abgleich um "
+                         f"{sync.offset - previous.offset:+.2f} s verändert — die PC-Uhr läuft "
+                         "instabil, das Timing zur Öffnung ist unzuverlässig.", alarm=True)
 
     def _current_sync(self) -> timing.ClockSync:
         ck = self.state.clock
@@ -353,10 +367,22 @@ class Engine:
     async def _run(self):
         if not self.courses or not any(c.groups for c in self.courses):
             raise Stop("Keine Kurse mit Gruppennummern eingetragen.")
+        s = self.settings
+        kind = "ECHTES LPIS" if s.https else "lokaler Fake-LPIS, nichts geht an die WU"
+        self.log(f"Ziel: {s.login_url} — {kind}.")
+        if s.observe_only:
+            self.log("PRÜFLAUF: Die Seiten werden nur gelesen, es wird nichts geklickt.")
         await self._launch()
         first_page = self._context.pages[0] if self._context.pages \
             else await self._context.new_page()
-        await self._goto(first_page, self.settings.login_url)
+        # Die Loginseite kommt sonst in ~1 s; hängt der erste Aufruf, lieber kurz
+        # neu versuchen als eine Minute auf about:blank zu warten.
+        for _ in range(3):
+            if await self._goto(first_page, s.login_url, timeout_ms=15_000):
+                break
+        else:
+            self.log(f"Die Loginseite lädt nicht von selbst — im Bot-Fenster die Adresse "
+                     f"{s.login_url} von Hand öffnen.", alarm=True)
         await self._find_pages(self.courses, first_time=True)
 
         armed: list[RuntimeCourse] = []
@@ -381,14 +407,27 @@ class Engine:
             opens = None
             if c.cfg.start_at:
                 opens = lp.parse_start_at(c.cfg.start_at)
+                if opens < timing.now() - 60:
+                    self.log(f"WARNUNG: Die manuelle Startzeit {c.cfg.start_at!r} liegt in der "
+                             "Vergangenheit — es wird sofort versucht. Alter Eintrag?",
+                             course=c.n, alarm=True)
             else:
                 opens = next(filter(None, (lp.parse_opening(rows[g])
                                            for g in c.groups if g in rows)), None)
             if opens is None:
                 if any(rows[g]["enabled"] for g in c.groups if g in rows):
-                    opens = time.time()  # schon offen: sofort versuchen
+                    opens = timing.now()  # schon offen: sofort versuchen
+                    c.open_now = True
                 else:
                     c.state.phase = Phase.ERROR
+                    deadline = next((rows[g]["opens"] for g in c.groups if g in rows
+                                     and lp.DEADLINE_RE.search(rows[g]["opens"])), "")
+                    if deadline:  # gesperrt und nur ein Fristende: die Anmeldung ist vorbei
+                        c.state.result = f"Anmeldung geschlossen (Frist war {deadline})"
+                        self.log(f"Die Anmeldung ist gesperrt und die Seite nennt nur ein "
+                                 f"Fristende ({deadline}) — hier ist nichts mehr anzumelden. "
+                                 "Kurs wird übersprungen.", course=c.n)
+                        continue
                     c.state.result = "keine Öffnungszeit gefunden"
                     self.log("Keine Öffnungszeit auf der Seite — bitte manuelle Startzeit "
                              "eintragen und neu starten. Kurs wird übersprungen.", course=c.n)
@@ -397,24 +436,89 @@ class Engine:
             c.page.on("dialog", self._accept_dialog)
             armed.append(c)
         self.push_state()
+        if s.observe_only:
+            await self._check_report(armed)
+            self._finish()
+            await asyncio.Event().wait()  # Browser offen lassen, bis der Nutzer stoppt
         if armed:
             await self._sync_clock(force=True)
             for c in armed:
                 self._arm(c)
-                self.log(f"ARMED — öffnet {_clock(c.opens_at)} LPIS-Zeit; "
-                         f"Reload um {_clock(c.fire_at)} PC-Zeit.", course=c.n)
+                self.log(f"ARMED — öffnet {_day_clock(c.opens_at)} LPIS-Zeit; "
+                         f"Reload um {_clock(c.fire_at + self.state.clock.offset)} LPIS-Zeit.",
+                         course=c.n)
             self.log("Das Browserfenster ab jetzt in Ruhe lassen.")
             await asyncio.gather(*(self._course_task(c) for c in armed))
         self._finish()
         await asyncio.Event().wait()  # Browser offen lassen, bis der Nutzer stoppt
+
+    async def _check_report(self, readable: list[RuntimeCourse]):
+        """Prüflauf: pro Kurs festhalten, ob alles lesbar war. Klickt nichts."""
+        s = self.settings
+        await self._sync_clock(force=True)  # prüft Zeitserver und Latenz gleich mit
+        if self.state.clock.source.startswith("PC-Uhr"):
+            self.log("WARNUNG: Uhrabgleich fehlgeschlagen — weder Zeitserver noch "
+                     "LPIS-Serveruhr erreichbar.", alarm=True)
+        clock_problem = ""
+        if not s.clock_stub:
+            # Zweite Messung nach kurzer Pause: läuft die PC-Uhr gleichmäßig?
+            first = self.state.clock.offset
+            self.log(f"Prüfe {s.drift_check_wait:.0f} s lang, ob die PC-Uhr stabil läuft …")
+            await asyncio.sleep(s.drift_check_wait)
+            await self._sync_clock(force=True)
+            drift = self.state.clock.offset - first
+            if abs(drift) > s.drift_warn:
+                clock_problem = (f"PC-Uhr instabil ({drift:+.2f} s in "
+                                 f"{s.drift_check_wait:.0f} s) — Timing unzuverlässig")
+        for c in self.courses:
+            for g in c.state.groups:
+                if g.on_page:
+                    self.log(f"Gelesen {g.id}: Button {g.button!r} "
+                             f"({'klickbar' if g.enabled else 'gesperrt'}), frei {g.free}, "
+                             f"Status {g.status!r}, Zeitangabe {g.opens!r}", course=c.n)
+        for c in readable:
+            found = {g.id: g for g in c.state.groups}
+            problems = [clock_problem] if clock_problem else []
+            missing = [g.id for g in c.state.groups if not g.on_page]
+            if missing:
+                problems.append(f"nicht auf der Seite: {', '.join(missing)}")
+            no_button = [g.id for g in c.state.groups if g.on_page and not g.button]
+            if no_button:
+                problems.append(f"kein Button bei {', '.join(no_button)}")
+            unknown_free = [g.id for g in c.state.groups if g.on_page and g.free is None]
+            if unknown_free:
+                problems.append(f"freie Plätze nicht lesbar bei {', '.join(unknown_free)}")
+            if c.open_now:
+                problems.append("Anmeldung ist BEREITS OFFEN — 'Start' würde sofort anmelden")
+            elif c.cfg.start_at and c.opens_at < timing.now() - 60:
+                problems.append(f"manuelle Startzeit {c.cfg.start_at!r} liegt in der Vergangenheit")
+            c.state.opens_at = c.opens_at
+            when = _day_clock(c.opens_at)
+            source = "manuelle Startzeit" if c.cfg.start_at else "von der Kursseite"
+            if problems:
+                c.state.phase = Phase.ERROR
+                c.state.result = "Prüflauf: " + "; ".join(problems)
+                self.log(f"PRÜFLAUF — PROBLEM: {'; '.join(problems)} "
+                         f"(Öffnung laut App: {'sofort' if c.open_now else when}, {source})",
+                         course=c.n, alarm=True)
+            else:
+                c.state.phase = Phase.DONE
+                c.state.result = f"geprüft: alles lesbar — öffnet {when}, nichts geklickt"
+                self.log(f"PRÜFLAUF ok — {len(found)} Gruppe(n) gelesen, öffnet {when} "
+                         f"({source}).", course=c.n)
+            c.state.message = ""
+        self.push_state()
 
     def _finish(self):
         self.log("ZUSAMMENFASSUNG")
         for c in self.courses:
             self.log(f"[{c.n}] {c.state.name or ', '.join(c.groups)}: "
                      f"{c.state.result or 'nicht versucht'}")
-        self.log("Fertig. Ergebnis in der LPIS-Anmeldeliste prüfen; "
-                 "'Stop' schließt den Browser.")
+        if self.settings.observe_only:
+            self.log("Prüflauf fertig — es wurde nichts geklickt. 'Stop' schließt den Browser.")
+        else:
+            self.log("Fertig. Ergebnis in der LPIS-Anmeldeliste prüfen; "
+                     "'Stop' schließt den Browser.")
         self.push_state()
 
     async def _accept_dialog(self, dialog):
@@ -424,22 +528,23 @@ class Engine:
     async def _course_task(self, c: RuntimeCourse):
         """Keepalive bis kurz vor der Öffnung, dann Re-Sync und Anmeldeversuche."""
         s = self.settings
-        next_reload = time.time()  # sofort einmal laden: beweist, dass Reload geht
-        while (left := c.fire_at - s.final_sync_before - time.time()) > 0:
-            if time.time() >= next_reload:
+        next_reload = timing.now()  # sofort einmal laden: beweist, dass Reload geht
+        while (left := c.fire_at - s.final_sync_before - timing.now()) > 0:
+            if timing.now() >= next_reload:
                 rows = await self._reload(c)
                 self._update_groups(c, rows)
-                next_reload = time.time() + s.keepalive_every
+                next_reload = timing.now() + s.keepalive_every
                 c.state.message = (f"ARMED — Session ok, "
-                                   f"{(c.fire_at - time.time()) / 60:.1f} min bis zum Schuss")
+                                   f"{(c.fire_at - timing.now()) / 60:.1f} min bis zum Schuss")
                 self.push_state()
-            await asyncio.sleep(max(0.05, min(left, next_reload - time.time(), 30)))
-        if c.fire_at - time.time() > 5:
+            await asyncio.sleep(max(0.05, min(left, next_reload - timing.now(), 30)))
+        if c.fire_at - timing.now() > 5:
             rows = await self._reload(c)
             self._update_groups(c, rows)
             await self._sync_clock()  # geteilte Messung: der erste Kurs misst, der Rest nutzt sie
             self._arm(c)
-            self.log(f"Letzter Check ok; Reload um {_clock(c.fire_at)} PC-Zeit.", course=c.n)
+            self.log(f"Letzter Check ok; Reload um "
+                     f"{_clock(c.fire_at + self.state.clock.offset)} LPIS-Zeit.", course=c.n)
         await self._register(c)
 
     async def _register(self, c: RuntimeCourse):
@@ -449,8 +554,8 @@ class Engine:
         self.push_state()
         await timing.sleep_until(c.fire_at)
         tries = dict.fromkeys(c.groups, 0)
-        while time.time() < c.fire_at + s.give_up_after:
-            started = time.time()
+        while timing.now() < c.fire_at + s.give_up_after:
+            started = timing.now()
             snap = None
             if await self._goto(c.page, c.url, course=c.n):
                 snap = await self._settle(c.page, course=c.n)
@@ -493,7 +598,7 @@ class Engine:
                         self.push_state()
                         return
             elif rows:
-                if time.time() > c.fire_at + s.give_up_if_locked:
+                if timing.now() > c.fire_at + s.give_up_if_locked:
                     c.state.phase = Phase.ERROR
                     c.state.result = "Anmeldung hat für deine Gruppen nie geöffnet"
                     self.log("Die Anmeldung ist für deine Gruppen nicht aufgegangen — "
@@ -504,7 +609,7 @@ class Engine:
                 self.push_state()
             # Schnelle Retries nur direkt an der Öffnung (falls wir einen Hauch zu
             # früh waren), danach deutlich sachter — LPIS nicht fluten.
-            since = time.time() - c.fire_at
+            since = timing.now() - c.fire_at
             pause = 0.15 if since < 2 else 0.5 if since < 10 else 2.0
             await timing.sleep_until(started + pause)
         c.state.phase = Phase.ERROR
@@ -516,6 +621,8 @@ class Engine:
     async def _click(self, c: RuntimeCourse, row_id: str) -> dict | None:
         """Den Button klicken, auf die Antwortseite warten, deren Snapshot liefern."""
         s = self.settings
+        if s.observe_only:  # Schutz in der Tiefe: der Prüflauf darf nie klicken
+            raise Stop("Prüflauf: Klick verweigert.")
         try:
             if not await c.page.evaluate(lp.CLICK_JS, row_id):
                 self.log("Der Button war doch nicht klickbar.", course=c.n)
@@ -555,6 +662,11 @@ class Engine:
                      f"zeigt jetzt '{row['button']}'.", course=c.n)
         self._update_groups(c, lp.rows_by_group(snap))
         self.push_state()
+
+
+def _day_clock(t: float) -> str:
+    import datetime as dt
+    return dt.datetime.fromtimestamp(t, lp.VIENNA).strftime("%d.%m. %H:%M:%S")
 
 
 def _clock(t: float) -> str:

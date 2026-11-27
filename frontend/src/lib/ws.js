@@ -3,10 +3,16 @@ import { writable, get } from 'svelte/store'
 
 export const connected = writable(false)
 export const engine = writable({
-  running: false, dry_run: false, logged_in: null,
+  running: false, dry_run: false, mode: 'live', target: '', logged_in: null,
   clock: { offset: 0, uncertainty: 0.5, trip: 0, source: 'none', synced_at: null },
   courses: [],
 })
+// Abstand Engine-Uhr minus Browser-Uhr (s). Die Engine rechnet auf einer eigenen,
+// gleichmäßig laufenden Uhr; der Countdown muss dieselbe benutzen.
+export const skew = writable(0)
+const noteServerTime = (state) => {
+  if (state && state.now) skew.set(state.now - Date.now() / 1000)
+}
 export const logs = writable([])
 export const config = writable({ courses: [], save_snapshots: false })
 
@@ -24,10 +30,12 @@ export function connect() {
   socket.onmessage = (msg) => {
     const event = JSON.parse(msg.data)
     if (event.type === 'hello') {
+      noteServerTime(event.state)
       engine.set(event.state)
       logs.set(event.logs)
       config.set(event.config)
     } else if (event.type === 'state') {
+      noteServerTime(event.state)
       engine.set(event.state)
     } else if (event.type === 'log' || event.type === 'alarm') {
       logs.update((list) => [...list.slice(-MAX_LOGS + 1), event])
@@ -85,5 +93,7 @@ export function saveConfigSoon() {
   }, 400)
 }
 
-export const startEngine = (dryRun) => api('/api/start', { dry_run: dryRun })
+// mode: 'live' (echte Anmeldung) | 'dry' (Fake-LPIS) | 'check' (echtes LPIS, nur lesen)
+export const startEngine = (mode = 'live') =>
+  api('/api/start', { dry_run: mode === 'dry', check: mode === 'check' })
 export const stopEngine = () => api('/api/stop', {})
