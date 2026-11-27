@@ -52,6 +52,7 @@ class EngineSettings:
     clock_stub: Optional[timing.ClockSync] = None  # feste Uhr (Tests)
     clock_max_age: float = 30.0             # s, bevor ein Re-Sync wieder misst
     observe_only: bool = False              # Prüflauf: alles lesen, nie klicken
+    direct_shot: bool = False               # experimentell: Formular ohne Neuladen abschicken
     drift_check_wait: float = 10.0          # s zwischen den zwei Uhr-Messungen im Prüflauf
     drift_warn: float = 0.25                # s Offset-Änderung, ab der die PC-Uhr als instabil gilt
 
@@ -71,6 +72,8 @@ class RuntimeCourse:
     opens_at: float = 0.0
     fire_at: float = 0.0
     open_now: bool = False  # keine Öffnungszeit, aber Button schon klickbar
+    shot_page: Optional[Page] = None  # Direktschuss: zweiter Tab mit vorgeladenem Formular
+    shot_group: str = ""              # normalisierte Nummer der Gruppe im Direktschuss
 
 
 class Engine:
@@ -92,7 +95,11 @@ class Engine:
     # --- Events an die UI -------------------------------------------------------
 
     def _emit(self, type_: str, **payload):
-        self.listener({"type": type_, "ts": time.time(), **payload})
+        # Zeitstempel auf der gleichmäßigen Uhr und, sobald abgeglichen, in LPIS-Zeit —
+        # die Systemuhr kann springen, dann stimmen Abstände im Log nicht.
+        clock = self.state.clock
+        ts = timing.now() + (clock.offset if clock.synced_at else 0.0)
+        self.listener({"type": type_, "ts": ts, **payload})
 
     def log(self, text: str, course: Optional[int] = None, alarm: bool = False):
         self._emit("alarm" if alarm else "log", course=course, text=text)
@@ -320,7 +327,8 @@ class Engine:
                 continue
             c.state.groups.append(GroupInfo(
                 id=r["id"], rank=rank, who=r["who"], title=r["title"],
-                button=r["button"], enabled=r["enabled"], free=r["free"],
+                button=r["button"], enabled=r["enabled"], in_form=r.get("inForm", False),
+                free=r["free"],
                 status=r["status"], opens=r["opens"]))
         self.push_state()
 
@@ -400,9 +408,10 @@ class Engine:
                          "Nicht auf die App verlassen!", course=c.n, alarm=True)
             if done := lp.registered_row(rows):
                 c.state.phase = Phase.DONE
-                c.state.result = f"bereits angemeldet: {done['id']} ({done['who']})"
-                self.log(f"Du bist hier schon angemeldet ({done['id']}) — Kurs wird "
-                         "übersprungen.", course=c.n)
+                where = "auf der Warteliste" if lp.is_waitlisted(done) else "angemeldet"
+                c.state.result = f"bereits {where}: {done['id']} ({done['who']})"
+                self.log(f"Du bist hier schon {where} ({done['id']}) — Kurs wird "
+                         "übersprungen, es wird nichts geklickt.", course=c.n)
                 continue
             opens = None
             if c.cfg.start_at:
@@ -475,7 +484,9 @@ class Engine:
                 if g.on_page:
                     self.log(f"Gelesen {g.id}: Button {g.button!r} "
                              f"({'klickbar' if g.enabled else 'gesperrt'}), frei {g.free}, "
-                             f"Status {g.status!r}, Zeitangabe {g.opens!r}", course=c.n)
+                             f"Status {g.status!r}, Zeitangabe {g.opens!r}, "
+                             f"Formular für Direktschuss: {'ja' if g.in_form else 'nein'}",
+                             course=c.n)
         for c in readable:
             found = {g.id: g for g in c.state.groups}
             problems = [clock_problem] if clock_problem else []
@@ -545,7 +556,97 @@ class Engine:
             self._arm(c)
             self.log(f"Letzter Check ok; Reload um "
                      f"{_clock(c.fire_at + self.state.clock.offset)} LPIS-Zeit.", course=c.n)
-        await self._register(c)
+        if s.direct_shot and c.fire_at - timing.now() > 2:
+            await self._prepare_shot(c)
+        try:
+            await self._register(c)
+        finally:
+            await self._close_shot(c)
+
+    # --- Direktschuss (experimentell) ----------------------------------------------
+
+    async def _prepare_shot(self, c: RuntimeCourse):
+        """Kurz vor der Öffnung einen zweiten Tab mit der Kursseite laden. Sein Formular
+        wird zur Öffnungssekunde direkt abgeschickt, während der Haupt-Tab wie immer
+        neu lädt und klickt — klappt der Direktschuss nicht, ist keine Zeit verloren."""
+        try:
+            page = await self._context.new_page()
+            page.on("dialog", self._accept_dialog)
+            rows = {}
+            if await self._goto(page, c.url, course=c.n):
+                rows = lp.rows_by_group(await self._settle(page, course=c.n))
+            usable = [g for g in c.groups if g in rows and rows[g].get("inForm")
+                      and not lp.REGISTERED_RE.search(rows[g]["button"])]
+            if not usable:
+                self.log("Direktschuss nicht möglich: Vor der Öffnung steht kein abschickbares "
+                         "Formular auf der Seite. Es läuft nur der normale Weg.", course=c.n)
+                await page.close()
+                return
+            # erste Wahl mit freien Plätzen; sonst die erste Wahl überhaupt
+            target = next((g for g in usable if rows[g]["free"] != 0), usable[0])
+            c.shot_page, c.shot_group = page, target
+            self.log(f"Direktschuss vorbereitet für {rows[target]['id']} "
+                     f"({rows[target]['who']}).", course=c.n)
+        except PlaywrightError as e:
+            self.log(f"Direktschuss nicht vorbereitet: {str(e).splitlines()[0]}", course=c.n)
+
+    async def _close_shot(self, c: RuntimeCourse):
+        page, c.shot_page = c.shot_page, None
+        if page:
+            try:
+                await page.close()
+            except PlaywrightError:
+                pass
+
+    async def _direct_shot(self, c: RuntimeCourse):
+        """Das vorgeladene Formular abschicken und das Ergebnis auswerten."""
+        s, page = self.settings, c.shot_page
+        if s.observe_only:  # Schutz in der Tiefe: der Prüflauf darf nie klicken
+            return
+        started = timing.now()
+        try:
+            row_id = next(g for g in c.cfg.groups if lp.normalize_group(g) == c.shot_group).strip()
+            try:
+                if not await page.evaluate(lp.FORCE_CLICK_JS, row_id):
+                    self.log("Direktschuss: Formular nicht abschickbar — der normale Weg "
+                             "läuft weiter.", course=c.n)
+                    return
+            except PlaywrightError:
+                if page.is_closed():
+                    return
+                # Die Seite hat schon navigiert, bevor evaluate zurückkam: abgeschickt.
+            self.log(f"Direktschuss: Formular von {row_id} ohne Neuladen abgeschickt.",
+                     course=c.n)
+            await page.wait_for_function(lp.PAGE_TURNED_JS,
+                                         timeout=s.nav_timeout_ms, polling=50)
+            snap = await self._settle(page, course=c.n)
+            await self._dump(page, f"shot_{c.n}.html")
+            took = timing.now() - started
+            alert = (snap or {}).get("alert", "")
+            self.log(f"Direktschuss: Antwort nach {took:.2f} s — LPIS sagt: "
+                     f"{alert or '(keine Meldung)'}", course=c.n)
+            if done := lp.registered_row(lp.rows_by_group(snap)):
+                self._success(c, done, snap)
+            else:
+                self.log("Direktschuss ohne Erfolg — der normale Weg läuft weiter.", course=c.n)
+        except PlaywrightError as e:
+            if not page.is_closed():
+                self.log(f"Direktschuss abgebrochen: {str(e).splitlines()[0]}", course=c.n)
+
+    # --- Anmelden -------------------------------------------------------------------
+
+    @staticmethod
+    def _finished(c: RuntimeCourse) -> bool:
+        return c.state.phase == Phase.DONE
+
+    def _describe(self, c: RuntimeCourse, rows: dict[str, dict]) -> str:
+        """Was ein Seitenaufruf gezeigt hat — für die Zeitmessung im Log."""
+        mine = [rows[g] for g in c.groups if g in rows]
+        if not mine:
+            return "keine Kurstabelle mit deinen Gruppen"
+        parts = [f"{r['id']}: {r['button'] or 'kein Button'}"
+                 f"{'' if r['enabled'] else ' gesperrt'}, {r['free']} frei" for r in mine]
+        return "; ".join(parts)
 
     async def _register(self, c: RuntimeCourse):
         s = self.settings
@@ -553,13 +654,38 @@ class Engine:
         c.state.message = "Warte auf die Öffnungssekunde …"
         self.push_state()
         await timing.sleep_until(c.fire_at)
+        shot = asyncio.create_task(self._direct_shot(c)) if c.shot_page else None
+        try:
+            await self._register_loop(c, shot)
+        finally:
+            if shot and not shot.done():
+                shot.cancel()
+                try:
+                    await shot
+                except (asyncio.CancelledError, PlaywrightError):
+                    pass
+
+    async def _register_loop(self, c: RuntimeCourse, shot: Optional[asyncio.Task]):
+        s = self.settings
         tries = dict.fromkeys(c.groups, 0)
+        calls, last_seen = 0, None
         while timing.now() < c.fire_at + s.give_up_after:
+            if self._finished(c):  # der Direktschuss war schneller
+                return
             started = timing.now()
             snap = None
             if await self._goto(c.page, c.url, course=c.n):
                 snap = await self._settle(c.page, course=c.n)
+            if self._finished(c):
+                return
             rows = lp.rows_by_group(snap)
+            # Zeitmessung: die ersten Aufrufe einzeln, danach nur noch Änderungen
+            calls += 1
+            seen = self._describe(c, rows)
+            if calls <= 8 or seen != last_seen:
+                self.log(f"Aufruf {calls} seit Öffnung: {timing.now() - started:.2f} s — {seen}",
+                         course=c.n)
+            last_seen = seen
             if done := lp.registered_row(rows):
                 return self._success(c, done, snap)
             if not rows:
@@ -568,8 +694,13 @@ class Engine:
                     continue
             else:
                 self._update_groups(c, rows)
+            shot_pending = bool(shot and not shot.done())
             candidates = [g for g in c.groups
                           if g in rows and rows[g]["enabled"] and tries[g] < s.tries_per_group]
+            if shot_pending:
+                # Solange die Antwort auf den Direktschuss aussteht, nur dieselbe Gruppe
+                # versuchen — sonst könnten zwei Gruppen gleichzeitig gebucht werden.
+                candidates = [g for g in candidates if g == c.shot_group]
             if candidates:
                 with_space = [g for g in candidates if rows[g]["free"] != 0]
                 if with_space:
@@ -587,17 +718,25 @@ class Engine:
                     r = rows[target]
                     self.log(f"Klicke '{r['button']}' bei {r['id']} ({r['who']}, "
                              f"{r['free']} frei)", course=c.n)
+                    clicked = timing.now()
                     after = await self._click(c, r["id"])
-                    if after and after["alert"]:
-                        self.log(f"LPIS sagt: {after['alert']}", course=c.n)
+                    if self._finished(c):
+                        return
+                    if after:
+                        self.log(f"Antwort auf den Klick nach {timing.now() - clicked:.2f} s — "
+                                 f"LPIS sagt: {after['alert'] or '(keine Meldung)'}", course=c.n)
                     if done := lp.registered_row(lp.rows_by_group(after)):
                         return self._success(c, done, after)
                     if after and lp.ALREADY_RE.search(after["alert"]):
+                        if shot and not shot.done():  # evtl. meint LPIS den Direktschuss
+                            await asyncio.wait([shot])
+                        if self._finished(c):
+                            return
                         c.state.phase = Phase.DONE
                         c.state.result = f"gestoppt — LPIS sagt: {after['alert']}"
                         self.push_state()
                         return
-            elif rows:
+            elif rows and not shot_pending:
                 if timing.now() > c.fire_at + s.give_up_if_locked:
                     c.state.phase = Phase.ERROR
                     c.state.result = "Anmeldung hat für deine Gruppen nie geöffnet"
@@ -612,6 +751,8 @@ class Engine:
             since = timing.now() - c.fire_at
             pause = 0.15 if since < 2 else 0.5 if since < 10 else 2.0
             await timing.sleep_until(started + pause)
+        if self._finished(c):
+            return
         c.state.phase = Phase.ERROR
         c.state.result = "aufgegeben — bitte von Hand in LPIS prüfen"
         self.log(f"Nach {s.give_up_after:.0f} s aufgegeben — von Hand prüfen!",
@@ -645,8 +786,10 @@ class Engine:
         return snap
 
     def _success(self, c: RuntimeCourse, row: dict, snap: dict | None):
+        if c.state.result.startswith(("angemeldet", "WARTELISTE")):
+            return  # schon vom anderen Weg (Direktschuss / Haupt-Tab) festgestellt
         c.state.phase = Phase.DONE
-        if snap and lp.WAITLIST_RE.search(snap["alert"]):
+        if lp.is_waitlisted(row) or (snap and lp.WAITLIST_RE.search(snap["alert"])):
             c.state.result = f"WARTELISTE bei {row['id']} ({row['who']})"
             self.log(f"FERTIG — aber auf der WARTELISTE von {row['id']} ({row['who']}).",
                      course=c.n, alarm=True)

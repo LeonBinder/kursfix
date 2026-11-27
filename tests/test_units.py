@@ -82,3 +82,16 @@ def test_store_roundtrip(tmp_path):
     loaded = load_config(path)
     assert loaded == cfg
     assert load_config(tmp_path / "fehlt.json") == AppConfig()
+
+
+def test_waitlist_rows_count_as_taken():
+    """'austragen' = Wartelistenplatz: gilt als bestehender Eintrag, nicht als Ziel."""
+    rows = {"1743": {"id": "1743", "button": "austragen",
+                     "status": "Wartelisteneintrag\n27.11.2026 14:00"},
+            "1822": {"id": "1822", "button": "eintragen",
+                     "status": "Wartelisteneintrag möglich"}}
+    assert lp.registered_row(rows)["id"] == "1743"
+    assert lp.is_waitlisted(rows["1743"])
+    assert not lp.is_waitlisted(rows["1822"])
+    assert not lp.is_waitlisted({"button": "abmelden", "status": "angemeldet"})
+    assert lp.registered_row({"1822": rows["1822"]}) is None

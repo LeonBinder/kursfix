@@ -14,7 +14,7 @@ const noteServerTime = (state) => {
   if (state && state.now) skew.set(state.now - Date.now() / 1000)
 }
 export const logs = writable([])
-export const config = writable({ courses: [], save_snapshots: false })
+export const config = writable({ courses: [], save_snapshots: false, direct_shot: false })
 
 const MAX_LOGS = 400
 let socket = null

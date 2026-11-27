@@ -56,6 +56,7 @@ class FakeLpis:
                  reject_clicks: dict[str, int] | None = None,
                  session_ttl: float | None = None,
                  auto_login: bool = False,
+                 reject_stale_tokens: bool = False,
                  latency: float = 0.05):
         self.opens_at = opens_at if opens_at is not None else float(int(timing.now() + opens_in))
         self.courses = courses or DEFAULT_COURSES
@@ -63,6 +64,9 @@ class FakeLpis:
         self.reject_clicks = dict(reject_clicks or {})   # lv -> Zahl absichtlicher Fehlklicks
         self.session_ttl = session_ttl
         self.auto_login = auto_login
+        # True: Formulare, die vor der Öffnung ausgeliefert wurden, gelten danach nicht mehr
+        # (so könnte das echte LPIS einen Direktschuss ablehnen)
+        self.reject_stale_tokens = reject_stale_tokens
         self.latency = latency
         self.registered: dict[str, str] = {}             # lv -> "fix" | "warteliste"
         self.sessions: dict[str, dict] = {}              # sid -> {created, tokens}
@@ -175,17 +179,22 @@ class FakeLpis:
                 return "Ungültige Anfrage (seed). Bitte die Seite neu laden."
             if lv not in self.courses[key][1]:
                 return "Unbekannte Lehrveranstaltung."
+            if form.get("cmd", [""])[0] in ("abmelden", "austragen"):
+                self.registered.pop(lv, None)
+                return f"Die Abmeldung von der Veranstaltung {lv} wurde durchgeführt."
             if timing.now() < self.opens_at:
                 return "Die Anmeldung ist derzeit nicht möglich."
+            if self.reject_stale_tokens and token["issued"] < self.opens_at:
+                return "Ungültige Anfrage (seed). Bitte die Seite neu laden."
             if self.reject_clicks.get(lv, 0) > 0:
                 self.reject_clicks[lv] -= 1
                 return "Technischer Fehler. Bitte versuchen Sie es erneut."
             if lv in self.full_at_open:
                 self.registered[lv] = "warteliste"
-                return ("Die Lehrveranstaltung ist bereits voll. "
-                        "Sie wurden auf die Warteliste gesetzt.")
+                return (f"Die Anmeldung zur Veranstaltung {lv} konnte nicht durchgeführt "
+                        f"werden. Sie wurden in die Warteliste für die LV {lv} eingetragen.")
             self.registered[lv] = "fix"
-            return "Sie haben sich erfolgreich angemeldet."
+            return f"Die Anmeldung zur Veranstaltung {lv} wurde durchgeführt."
 
     # --- Seiten ---------------------------------------------------------------------
 
@@ -216,6 +225,8 @@ class FakeLpis:
         is_open = timing.now() >= self.opens_at
         opens_text = dt.datetime.fromtimestamp(self.opens_at, VIENNA).strftime(
             "ab %d.%m.%Y %H:%M")
+        until_text = dt.datetime.fromtimestamp(self.opens_at + 5 * 86400, VIENNA).strftime(
+            "bis %d.%m.%Y 23:59")
         rows = []
         for lv, who in groups.items():
             state = self.registered.get(lv)
@@ -226,17 +237,30 @@ class FakeLpis:
             seed = secrets.token_hex(8)
             fname, fvalue = "f" + secrets.token_hex(4), secrets.token_hex(8)
             with self.lock:
-                sess["tokens"][seed] = {"lv": lv, "name": fname, "value": fvalue}
+                sess["tokens"][seed] = {"lv": lv, "name": fname, "value": fvalue,
+                                        "issued": timing.now()}
             hidden = (f"<input type='hidden' name='lv' value='{lv}'>"
                       f"<input type='hidden' name='seed' value='{seed}'>"
                       f"<input type='hidden' name='{fname}' value='{fvalue}'>")
             form_open = f"<form method='post' action='/course/{key}'>{hidden}"
-            if state:
-                box = "angemeldet" if state == "fix" else "Warteliste"
+            # Beschriftungen wie im echten LPIS: Fixplatz "abmelden", Wartelistenplatz
+            # "austragen", volle Gruppe "eintragen" (= Wartelisteneintrag); offene Zeilen
+            # zeigen das Fristende ("bis …"), gesperrte die Öffnung ("ab …").
+            deadline = f"<div class='timestamp'><span>{until_text}</span></div>"
+            if state == "fix":
+                box = "angemeldet"
                 action = form_open + "<input type='submit' name='cmd' value='abmelden'></form>"
+            elif state:
+                box = f"Wartelisteneintrag<br>{opens_text[3:]}"
+                action = form_open + "<input type='submit' name='cmd' value='austragen'></form>"
+            elif is_open and free == 0:
+                box = "Wartelisteneintrag möglich"
+                action = (form_open + "<input type='submit' name='cmd' value='eintragen'></form>"
+                          + deadline)
             elif is_open:
                 box = "Anmeldung möglich"
-                action = form_open + "<input type='submit' name='cmd' value='anmelden'></form>"
+                action = (form_open + "<input type='submit' name='cmd' value='anmelden'></form>"
+                          + deadline)
             else:
                 box = "Anmeldung nicht möglich"
                 action = (form_open + "<input type='submit' name='cmd' value='anmelden' disabled>"

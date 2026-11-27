@@ -52,7 +52,8 @@
     {
       q: 'Erfolg, Warteliste oder Fehler — woran erkenne ich es?',
       a: `Angemeldet: Der Button der Gruppe wechselt zu „abmelden“, die Karte wird grün.
-          Warteliste: LPIS meldet es im Klick-Ergebnis, die Karte zeigt WARTELISTE in Gold.
+          Warteliste: Der Button der Gruppe heißt dann „austragen“, die Karte zeigt WARTELISTE
+          in Gold; kursfix klickt „abmelden“ und „austragen“ nie.
           „Kein Button gefunden“: LPIS hat sein Seitenlayout geändert — dann nicht auf
           kursfix verlassen und von Hand anmelden. „Aufgegeben“: 2 Minuten nach Öffnung
           ohne Erfolg; Nummern und Uhrzeit prüfen.`,
@@ -65,6 +66,23 @@
           „geprüft“ oder das Problem. Ideal ein paar Stunden vor der Öffnung. Achtung:
           Ist eine Anmeldung schon offen, sagt dir der Prüflauf das — „Start“ würde dann
           sofort anmelden.`,
+    },
+    {
+      q: 'Direktschuss (experimentell) — schneller ohne Neuladen',
+      a: `Normal lädt kursfix zur Öffnung die Seite neu und klickt dann. Unter Last kann
+          allein das Neuladen mehrere Sekunden dauern. Mit dem Direktschuss wird kurz vor
+          der Öffnung ein zweiter Tab geladen und dessen Formular zur Öffnungssekunde
+          sofort abgeschickt; der normale Weg läuft parallel als Absicherung. Ob LPIS ein
+          vor der Öffnung geladenes Formular annimmt, ist nicht erprobt — lehnt es ab,
+          bleibt alles wie ohne Direktschuss. Der Prüflauf zeigt pro Gruppe, ob vor der
+          Öffnung überhaupt ein abschickbares Formular auf der Seite steht.`,
+    },
+    {
+      q: 'Das Log lesen — wo ging die Zeit hin?',
+      a: `Die Zeitstempel sind LPIS-Zeit. Nach der Öffnung steht für jeden Seitenaufruf
+          „Aufruf N seit Öffnung: X s — …“ mit dem, was die Seite gezeigt hat (gesperrt,
+          freie Plätze), und nach jedem Klick „Antwort auf den Klick nach X s“. So siehst
+          du, ob das Laden, das Warten auf die Freischaltung oder die Antwort gedauert hat.`,
     },
     {
       q: 'Echt oder Fake — wogegen läuft es gerade?',

@@ -117,6 +117,13 @@
     {/each}
 
     {#if $config.courses.length}
+      <label class="flex cursor-pointer items-start gap-1.5 text-[11px] text-zinc-400"
+             title="Zur Öffnungssekunde wird zusätzlich das schon geladene Formular der ersten Wahl abgeschickt — spart das Neuladen. Ob LPIS das annimmt, ist ungetestet; der normale Weg läuft parallel weiter.">
+        <input type="checkbox" checked={$config.direct_shot} {disabled}
+               onchange={(e) => { config.update((c) => ({ ...c, direct_shot: e.target.checked })); saveConfigSoon() }}
+               class="mt-0.5 accent-[#0b80a7]" />
+        Direktschuss (experimentell): Formular ohne Neuladen abschicken, normaler Weg läuft als Absicherung mit
+      </label>
       <label class="flex cursor-pointer items-center gap-1.5 text-[11px] text-zinc-400">
         <input type="checkbox" checked={$config.save_snapshots} {disabled}
                onchange={(e) => { config.update((c) => ({ ...c, save_snapshots: e.target.checked })); saveConfigSoon() }}

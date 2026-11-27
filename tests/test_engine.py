@@ -156,3 +156,81 @@ async def test_check_run_flags_already_open_course():
     assert engine.courses[0].state.phase == Phase.ERROR
     assert "BEREITS OFFEN" in engine.courses[0].state.result
     assert any(e["type"] == "alarm" and "BEREITS OFFEN" in e["text"] for e in events)
+
+
+def _texts(events, prefix):
+    return [e["text"] for e in events if e["type"] in ("log", "alarm")
+            and e["text"].startswith(prefix)]
+
+
+async def test_waitlist_entry_is_recognised_and_never_clicked_again():
+    """Echtes LPIS: Wartelistenplatz = Button 'austragen'. Das ist ein Ergebnis —
+    und darf nie angeklickt werden (das würde den Platz wieder hergeben)."""
+    fake = FakeLpis(opens_in=8, full_at_open={"1111", "1112"}).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111", "1112"], start_at=start_at(fake), waitlist=True),
+        ], keep_running=fake.opens_at + 6)
+    finally:
+        fake.stop()
+    assert fake.registered == {"1111": "warteliste"}     # nicht wieder ausgetragen
+    assert "WARTELISTE" in engine.courses[0].state.result
+    assert len(_texts(events, "Klicke")) == 1
+    assert _texts(events, "Klicke")[0].startswith("Klicke 'eintragen'")
+
+
+async def test_existing_waitlist_entry_is_left_alone():
+    """Schon auf der Warteliste -> Kurs überspringen, nichts klicken."""
+    fake = FakeLpis(opens_in=-30, full_at_open={"1111"}).start()
+    fake.registered["1111"] = "warteliste"
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111", "1112"], waitlist=True),
+        ], keep_running=timing.now() + 4)
+    finally:
+        fake.stop()
+    assert fake.registered == {"1111": "warteliste"}
+    assert engine.courses[0].state.result.startswith("bereits auf der Warteliste")
+    assert not _texts(events, "Klicke")
+
+
+async def test_direct_shot_registers_without_reload():
+    """Direktschuss: Das vor der Öffnung geladene Formular wird angenommen."""
+    fake = FakeLpis(opens_in=10).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111", "1112"], start_at=start_at(fake)),
+        ], settings=fast_settings(fake, direct_shot=True), keep_running=fake.opens_at + 5)
+    finally:
+        fake.stop()
+    assert fake.registered == {"1111": "fix"}            # genau eine Gruppe, nicht zwei
+    assert engine.courses[0].state.result.startswith("angemeldet: 1111")
+    assert _texts(events, "Direktschuss vorbereitet")
+    assert _texts(events, "Direktschuss: Antwort nach")
+    assert len(_texts(events, "FERTIG")) == 1            # Erfolg nur einmal gemeldet
+
+
+async def test_direct_shot_rejected_falls_back_to_normal_path():
+    """Lehnt LPIS das alte Formular ab, meldet der normale Weg trotzdem an."""
+    fake = FakeLpis(opens_in=10, reject_stale_tokens=True).start()
+    try:
+        engine, events = await run_to_end(fake, [
+            course("a", ["1111", "1112"], start_at=start_at(fake)),
+        ], settings=fast_settings(fake, direct_shot=True), keep_running=fake.opens_at + 5)
+    finally:
+        fake.stop()
+    assert fake.registered == {"1111": "fix"}
+    assert engine.courses[0].state.result.startswith("angemeldet: 1111")
+    assert _texts(events, "Direktschuss ohne Erfolg")
+    assert _texts(events, "Klicke 'anmelden'")
+    assert _texts(events, "Aufruf 1 seit Öffnung")
+
+
+async def test_step_timing_is_logged():
+    fake = FakeLpis(opens_in=8).start()
+    try:
+        _, events = await run_to_end(fake, [course("a", ["1111"], start_at=start_at(fake))])
+    finally:
+        fake.stop()
+    assert _texts(events, "Aufruf 1 seit Öffnung")
+    assert _texts(events, "Antwort auf den Klick nach")

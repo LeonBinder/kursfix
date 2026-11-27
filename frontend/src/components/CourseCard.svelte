@@ -47,7 +47,12 @@
             <span class="font-mono text-[13px] tabular-nums {g.free === 0 ? 'text-wu-red' : 'text-zinc-500 dark:text-zinc-400'}">
               {g.free === null ? '' : `${g.free} frei`}
             </span>
-            {#if /abmelden|deregist/i.test(g.button)}
+            {#if /austragen/i.test(g.button)}
+              <!-- Button zeigt „austragen“ = du stehst hier auf der Warteliste -->
+              <span class="shrink-0 rounded-md bg-wu-gold/10 px-1.5 py-0.5 text-[11px] font-bold text-wu-gold">
+                Warteliste
+              </span>
+            {:else if /abmelden|deregist/i.test(g.button)}
               <!-- Button zeigt „abmelden“ = hier bist du angemeldet -->
               <span class="shrink-0 rounded-md bg-wu-green/10 px-1.5 py-0.5 text-[11px] font-bold text-wu-green dark:bg-emerald-400/10 dark:text-emerald-400">
                 ✓ angemeldet

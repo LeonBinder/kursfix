@@ -18,8 +18,13 @@ from zoneinfo import ZoneInfo
 
 VIENNA = ZoneInfo("Europe/Vienna")
 
-# Button-Beschriftungen, die "schon angemeldet" bedeuten
-REGISTERED_RE = re.compile(r"abmelden|deregist|unregist", re.I)
+# Button-Beschriftungen, die einen bestehenden Eintrag bedeuten: "abmelden" bei
+# einem Fixplatz, "austragen" bei einem Wartelistenplatz. Solche Buttons werden
+# nie geklickt — ein Klick würde den Platz wieder hergeben.
+REGISTERED_RE = re.compile(r"abmelden|austragen|deregist|unregist", re.I)
+# Zeile steht für einen Wartelistenplatz (Button "austragen" / Status "Wartelisteneintrag")
+WAITLISTED_BUTTON_RE = re.compile(r"austragen", re.I)
+WAITLISTED_STATUS_RE = re.compile(r"wartelisteneintrag(?!\s*möglich)", re.I)
 # Alert-Texte, die "auf der Warteliste gelandet" bedeuten
 WAITLIST_RE = re.compile(r"warteliste|waiting list", re.I)
 # Alert-Texte, die "bereits angemeldet / nicht mehr möglich" bedeuten
@@ -30,7 +35,8 @@ BUSY_RE = re.compile(r"warte|queue|wait", re.I)
 LOGIN_URL_MARKERS = ("bach-id.", "/login")
 
 _COMMON_JS = r"""
-  const ACTION_RE = /anmelden|abmelden|warteliste|regist/i;
+  const ACTION_RE = /anmelden|abmelden|eintragen|austragen|warteliste|regist/i;
+  const TAKEN_RE = /abmelden|austragen|deregist|unregist/i;
   const allRows = () => Array.from(document.querySelectorAll('table.b3k-data'))
     .flatMap(t => Array.from(t.querySelectorAll(':scope > tbody > tr')));
   const groupIdOf = row =>
@@ -45,18 +51,19 @@ _COMMON_JS = r"""
     const el = candidates.find(c => ACTION_RE.test(labelOf(c)))
             || candidates.find(c => c.tagName !== 'A')
             || null;
-    if (!el) return { el: null, label: '', usable: false };
+    if (!el) return { el: null, label: '', usable: false, taken: false, inForm: false };
     const label = labelOf(el);
-    const usable = !el.disabled && !el.classList.contains('disabled')
-                 && !/abmelden|deregist|unregist/i.test(label);
-    return { el, label, usable };
+    const taken = TAKEN_RE.test(label);
+    const usable = !el.disabled && !el.classList.contains('disabled') && !taken;
+    const inForm = !!(el.form || el.closest('form'));
+    return { el, label, usable, taken, inForm };
   };
 """
 
 # Liest die ganze Kurstabelle als Daten; verändert nichts.
 SNAPSHOT_JS = "() => {" + _COMMON_JS + r"""
   const rows = allRows().map(row => {
-    const { label, usable } = controlOf(row);
+    const { label, usable, inForm } = controlOf(row);
     const flat = row.innerText.replace(/\s+/g, ' ').trim();
     const capCell = row.querySelector('td.capacity');
     const cap = ((capCell && capCell.innerText) || flat).match(/(\d+)\s*\/\s*(\d+)/);
@@ -68,6 +75,7 @@ SNAPSHOT_JS = "() => {" + _COMMON_JS + r"""
       id: groupIdOf(row),
       button: label,
       enabled: usable,
+      inForm,
       who: info[0] || '',
       title: info.slice(1).join(' ').replace(/\s+[A-Z]{2}$/, '').trim(),
       free: cap ? Number(cap[1]) : null,
@@ -99,6 +107,22 @@ CLICK_JS = "(wanted) => {" + _COMMON_JS + r"""
   return true;
 }"""
 
+# Direktschuss: schickt das Formular einer Gruppe ab, obwohl ihr Button auf der
+# (vor der Öffnung geladenen) Seite noch gesperrt ist — spart das Neuladen zur
+# Öffnungssekunde. Ob LPIS ein vor der Öffnung ausgegebenes Formular annimmt,
+# entscheidet der Server; ein bestehender Eintrag wird auch hier nie angefasst.
+FORCE_CLICK_JS = "(wanted) => {" + _COMMON_JS + r"""
+  const row = allRows().find(r => groupIdOf(r) === wanted);
+  if (!row) return false;
+  const { el, taken, inForm } = controlOf(row);
+  if (!el || taken || !inForm) return false;
+  el.disabled = false;
+  el.classList.remove('disabled');
+  window.__kursfixStalePage = true;
+  el.click();
+  return true;
+}"""
+
 # Wird nach dem Klick true: die alte Seite ist weg und die neue fertig geladen.
 PAGE_TURNED_JS = "() => !window.__kursfixStalePage && document.readyState !== 'loading'"
 
@@ -116,8 +140,15 @@ def rows_by_group(snapshot: dict | None) -> dict[str, dict]:
 
 
 def registered_row(rows: dict[str, dict]) -> dict | None:
-    """Die Zeile, deren Button 'abmelden' zeigt — also die bestehende Anmeldung."""
+    """Die Zeile mit einem bestehenden Eintrag: Button 'abmelden' (Fixplatz) oder
+    'austragen' (Warteliste)."""
     return next((r for r in rows.values() if REGISTERED_RE.search(r["button"])), None)
+
+
+def is_waitlisted(row: dict) -> bool:
+    """Steht diese Zeile für einen Wartelistenplatz statt für einen Fixplatz?"""
+    return bool(WAITLISTED_BUTTON_RE.search(row.get("button", ""))
+                or WAITLISTED_STATUS_RE.search(row.get("status", "")))
 
 
 # Zeitangaben, die eine Frist (Ende der An-/Abmeldung) meinen, keine Öffnung

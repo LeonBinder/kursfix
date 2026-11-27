@@ -62,6 +62,7 @@ class StartRequest(BaseModel):
 def _real_settings(config: AppConfig, observe_only: bool = False) -> EngineSettings:
     return EngineSettings(
         observe_only=observe_only,
+        direct_shot=config.direct_shot,
         profile_dir=DATA_DIR / "browser-profile",
         snapshots_dir=(DATA_DIR / "snapshots") if config.save_snapshots else None,
     )
@@ -85,6 +86,7 @@ def _dry_run_settings(config: AppConfig) -> tuple[EngineSettings, AppConfig]:
         ntp_host=None,
         http_host="127.0.0.1", http_port=fake_server.port, https=False,
         profile_dir=DATA_DIR / "browser-profile-dry",
+        direct_shot=config.direct_shot,
         snapshots_dir=None,
     )
     # Manuelle Startzeiten gelten für den echten Lauf, nicht für die Probe:

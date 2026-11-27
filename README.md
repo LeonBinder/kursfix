@@ -111,6 +111,23 @@ Seite richtig versteht. Den Klick selbst kann nur der echte Lauf zeigen.
 `TROCKENLAUF` (lokaler Fake). Die erste Logzeile nennt das Ziel, und die
 Adresszeile im Bot-Fenster zeigt `lpis.wu.ac.at` bzw. `127.0.0.1`.
 
+## Direktschuss (experimentell)
+
+Unter Last kann schon das Neuladen der Kursseite zur Öffnung mehrere Sekunden
+dauern. Mit der Option **Direktschuss** lädt kursfix kurz vor der Öffnung einen
+zweiten Tab und schickt dessen Formular zur Öffnungssekunde direkt ab; der
+normale Weg (neu laden, echten Button klicken) läuft parallel als Absicherung.
+Solange die Antwort aussteht, versucht der normale Weg nur dieselbe Gruppe.
+**Ob LPIS ein vor der Öffnung geladenes Formular annimmt, ist nicht erprobt** —
+lehnt es ab, verhält sich kursfix wie ohne die Option. Standard: aus.
+
+## Das Log lesen
+
+Zeitstempel sind LPIS-Zeit. Nach der Öffnung steht für jeden Seitenaufruf
+`Aufruf N seit Öffnung: X s — …` (was die Seite zeigte) und nach jedem Klick
+`Antwort auf den Klick nach X s — LPIS sagt: …`. Wartelistenplätze erkennt
+kursfix am Button „austragen"; „abmelden" und „austragen" werden nie geklickt.
+
 ## Tests
 
 ```bash

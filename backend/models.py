@@ -20,6 +20,8 @@ class AppConfig(BaseModel):
     """Alles, was lokal in data/config.json gespeichert wird."""
     courses: list[CourseConfig] = Field(default_factory=list)
     save_snapshots: bool = False         # HTML-Seiten mitschreiben (enthalten Name + Matrikelnr.)
+    direct_shot: bool = False            # experimentell: zur Öffnung zusätzlich das schon geladene
+                                         # Formular abschicken (spart das Neuladen)
 
 
 class Phase(str, Enum):
@@ -40,6 +42,7 @@ class GroupInfo(BaseModel):
     title: str = ""
     button: str = ""                     # Beschriftung des gefundenen Buttons
     enabled: bool = False
+    in_form: bool = False                # Button steckt in einem Formular (Direktschuss möglich)
     free: Optional[int] = None
     status: str = ""
     opens: str = ""
